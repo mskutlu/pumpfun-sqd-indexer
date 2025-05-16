@@ -1,0 +1,72 @@
+type GlobalConfig @entity {
+  id: ID!                    # always "global"
+  feeRecipient: String!
+  feeBasisPoints: BigInt!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type PumpToken @entity {
+  id: ID!                    # mint address (base58)
+  name: String!
+  symbol: String!
+  decimals: Int!
+  creator: String!
+  bondingCurve: BondingCurve!
+  status: String!            # active | completed
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type BondingCurve @entity {
+  id: ID!                    # PDA derived from seed + mint (base58)
+  token: PumpToken!
+  virtualSolReserves: BigInt!
+  virtualTokenReserves: BigInt!
+  realSolReserves: BigInt!
+  realTokenReserves: BigInt!
+  tokenTotalSupply: BigInt!
+  feeBasisPoints: BigInt!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+type TokenCreated @entity {
+  id: ID!                    # txSignature-logIdx
+  token: PumpToken!
+  user: String!
+  uri: String!
+  slot: Int!
+  timestamp: DateTime!
+}
+
+type Trade @entity {
+  id: ID!
+  token: PumpToken!
+  user: String!
+  isBuy: Boolean!
+  solAmount: BigInt!
+  tokenAmount: BigInt!
+  virtualSolReserves: BigInt!
+  virtualTokenReserves: BigInt!
+  realSolReserves: BigInt!
+  realTokenReserves: BigInt!
+  slot: Int!
+  timestamp: DateTime!
+}
+
+type TokenCompleted @entity {
+  id: ID!
+  token: PumpToken!
+  user: String!
+  slot: Int!
+  timestamp: DateTime!
+}
+
+type ParamsUpdated @entity {
+  id: ID!
+  token: PumpToken!
+  feeRecipient: String!
+  feeBasisPoints: BigInt!
+  slot: Int!
+  timestamp: DateTime!
+}
