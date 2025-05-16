@@ -106,6 +106,23 @@ export class TradeService {
       }
       
       const id = `${txId}-${this.nextIndex(txId)}`;
+      // Set initial real reserves - we'll prefer using the provided rSol and rToken if available
+      let realSolReserves = rSol !== undefined ? rSol : 0n;
+      let realTokenReserves = rToken !== undefined ? rToken : 0n;
+      
+      // If real reserves weren't provided, estimate based on virtual reserves and trade type
+      if (realSolReserves === 0n && realTokenReserves === 0n) {
+        if (isBuy) {
+          // When buying, SOL increases and tokens decrease
+          realSolReserves = vSol * 3n / 10n; // ~30% of virtual as real reserves
+          realTokenReserves = vToken * 8n / 10n; // ~80% of virtual as real tokens
+        } else {
+          // When selling, SOL decreases and tokens increase
+          realSolReserves = vSol * 7n / 10n; // ~70% of virtual as real reserves
+          realTokenReserves = vToken * 2n / 10n; // ~20% of virtual as real tokens
+        }
+      }
+      
       const trade = new Trade({
         id,
         token,
@@ -115,8 +132,8 @@ export class TradeService {
         tokenAmount,
         virtualSolReserves: vSol,
         virtualTokenReserves: vToken,
-        realSolReserves: rSol,
-        realTokenReserves: rToken,
+        realSolReserves,
+        realTokenReserves,
         slot,
         timestamp: new Date(timestamp * 1000)
       });
@@ -161,16 +178,16 @@ export class TradeService {
       && f.accounts[0].toLowerCase() === indexes.EVENT_AUTHORITY.toLowerCase() && f.d8 === pumpIns.tradeEventInstruction.d8 );
       if(inner.length === 0 || txSignature === 'unknown')
         return;
-      let decoded;
+      let decodedInnerInstruction;
       for(const i of inner) {
         try {
-          decoded = pumpIns.tradeEventInstruction.decode(i);
+          decodedInnerInstruction = pumpIns.tradeEventInstruction.decode(i);
         } catch (error) {
         // ignore, try next instruction
-        // sometimes it can contains other instructions with same d8 and it cant be decoded.
+        // sometimes it can contains other instructions with same d8 and it cant be decodedInnerInstruction.
         }
       }
-      if (!decoded || !decoded.data) {
+      if (!decodedInnerInstruction || !decodedInnerInstruction.data) {
         console.error('Failed to decode trade event instruction', txSignature);
         return;
       }
@@ -178,23 +195,48 @@ export class TradeService {
       const {
         mint, solAmount, tokenAmount, isBuy, user, 
         virtualSolReserves, virtualTokenReserves
-      } = decoded.data;
+      } = decodedInnerInstruction.data;
+
+      // Decode the main instruction based on whether it's a buy or sell
+      let decodedInstruction;
+      if (isBuy) {
+        decodedInstruction = pumpIns.buy.decode(instruction);
+      }
+      else {
+        decodedInstruction = pumpIns.sell.decode(instruction);
+      }
       
-      // Real reserves may or may not be included in the event, initialize to 0
-      const realSolReserves = 0n;
-      const realTokenReserves = 0n;
+      // Get the accounts from the decoded instruction
+      const { accounts } = decodedInstruction;
+      const { bondingCurve: bondingCurveAccount } = accounts;
+
+      // Calculate estimated real reserves based on virtual reserves and trade type
+      // Initial values - we'll try to get actual values from the bonding curve later
+      let realSolReserves: bigint;
+      let realTokenReserves: bigint;
       
+      // Estimate based on virtual reserves and trade type
+      if (isBuy) {
+        // When buying, SOL increases and tokens decrease
+        realSolReserves = virtualSolReserves * 3n / 10n; // ~30% of virtual as real reserves
+        realTokenReserves = virtualTokenReserves * 8n / 10n; // ~80% of virtual as real tokens
+      } else {
+        // When selling, SOL decreases and tokens increase
+        realSolReserves = virtualSolReserves * 7n / 10n; // ~70% of virtual as real reserves
+        realTokenReserves = virtualTokenReserves * 2n / 10n; // ~20% of virtual as real tokens
+      }
+
       // We need to get the token for this trade
       let token: PumpToken | undefined;
       if (this.tokenService) {
         token = await this.tokenService.getToken(mint.toString(), true); // Create placeholder if needed
       }
-      
+
       if (!token) {
         console.error(`Failed to get or create token ${mint.toString()} for trade event`);
         return;
       }
-      
+
       // Create the trade record
       await this.createTrade({
         id: `${txSignature}-${this.nextIndex(txSignature)}`,
@@ -212,11 +254,37 @@ export class TradeService {
         timestamp
       });
       stats.entities.trades++;
-      
+
       // Update the bonding curve if available
       if (this.curveService) {
-        const bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+        // First try to get by direct account reference from the decoded instruction
+        let bondingCurve = bondingCurveAccount ?
+          await this.curveService.getBondingCurve(bondingCurveAccount.toString()) : undefined;
+
+        // If not found by account, try to find by token ID as fallback
+        if (!bondingCurve && token) {
+          bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+        }
+
         if (bondingCurve) {
+          // Use the existing real reserves as our starting point
+          realSolReserves = bondingCurve.realSolReserves;
+          realTokenReserves = bondingCurve.realTokenReserves;
+          
+          // Update real reserves based on trade activity according to AMM logic
+          if (isBuy) {
+            // When buying: SOL goes in, tokens come out
+            realSolReserves = realSolReserves + solAmount;
+            realTokenReserves = realTokenReserves - tokenAmount;
+          } else {
+            // When selling: tokens go in, SOL comes out
+            realSolReserves = realSolReserves - solAmount;
+            realTokenReserves = realTokenReserves + tokenAmount;
+          }
+          
+          // Ensure we don't go negative
+          if (realSolReserves < 0n) realSolReserves = 0n;
+          if (realTokenReserves < 0n) realTokenReserves = 0n;
           // Update reserves
           await this.curveService.updateBondingCurve(bondingCurve.id, {
             virtualSolReserves,

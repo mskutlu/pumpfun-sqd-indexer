@@ -138,45 +138,62 @@ export const buy = instruction(
   {
     d8: '0x66063d1201daebea',
   },
-  {
-    /**
-     * Bonding curve PDA
-     */
-    bondingCurve: 0,
-    /**
-     * Fee recipient account
-     */
-    feeRecipient: 1,
-    /**
-     * User account (signer)
-     */
-    user: 2,
-    /**
-     * User token account
-     */
-    userTokenAccount: 3,
-    /**
-     * Mint account
-     */
-    mint: 4,
-    /**
-     * Token program
-     */
-    tokenProgram: 5,
-    /**
-     * System program
-     */
-    systemProgram: 6,
-    /**
-     * Event authority
-     */
-    eventAuthority: 7,
-    /**
-     * Program
-     */
-    program: 8
-  },
-  unit
+    {
+      /**
+       * Global state PDA
+       */
+      global: 0,
+      /**
+       * Fee recipient account
+       */
+      feeRecipient: 1,
+
+      /**
+       * Mint account
+       */
+      mint: 2,
+      /**
+       * Bonding curve PDA
+       */
+      bondingCurve: 3,
+      /**
+       * Associated bonding curve
+       */
+      associatedBondingCurve: 4,
+
+      /**
+       * Associated user account
+       */
+      associatedUser: 5,
+      /**
+       * User account (signer)
+       */
+      user: 6,
+      /**
+       * System program
+       */
+      systemProgram: 7,
+      /**
+       * Token program
+       */
+      tokenProgram: 8,
+      /**
+       * Rent
+       */
+      rent: 9,
+      /**
+       * Event authority
+       */
+      eventAuthority: 10,
+      /**
+       * Program
+       */
+      program: 11
+    },
+    struct({
+      amount: u64,
+      maxSolCost: u64,
+    })
 )
 
 /**
@@ -227,14 +244,13 @@ export const sell = instruction(
      */
     systemProgram: 7,
     /**
-     * User token account
+     * Associated Token program
      */
-    userTokenAccount: 8,
+    associatedTokenProgram: 8,
     /**
-     * Token program
+     * Token Program
      */
-    associatedTokenProgram: 9,
-    
+    tokenProgram: 9,
     /**
      * Event authority
      */
