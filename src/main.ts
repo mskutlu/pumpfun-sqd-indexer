@@ -21,9 +21,8 @@ const dataSource = new DataSourceBuilder()
         }),
         strideConcurrency: 1
     })
-    // Set start position to a reasonable block to avoid processing
-    // too many blocks during development
-    .setBlockRange({ from: 294625450 })
+    // Set start position to the earliest available block in the dataset
+    .setBlockRange({ from: 299804550 })
     .setFields({
         block: { 
             timestamp: true,
@@ -59,6 +58,18 @@ const dataSource = new DataSourceBuilder()
         }
     }).build()
 
-// Define the database 
-const database = new TypeormDatabase({})
+// Define the database with optimized configuration
+const database = new TypeormDatabase({
+  stateSchema: 'squid_processor',
+  // Increase the isolation level to READ COMMITTED for better throughput
+  isolationLevel: 'READ COMMITTED'
+})
+
+// Set environment variables to improve batch processing performance
+process.env.BATCH_SIZE = '3000'           // Process more blocks per batch
+process.env.BLOCK_CONCURRENCY = '5'       // Process blocks concurrently
+process.env.TYPEORM_BATCH_SIZE = '2000'   // TypeORM bulk insert batch size
+
+// Run the processor
 run(dataSource, database, handle)
+

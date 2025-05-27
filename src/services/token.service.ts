@@ -55,6 +55,27 @@ export class TokenService {
   }
   
   /**
+   * Get all tokens
+   */
+  getAllTokens(): PumpToken[] {
+    return this.tokenStore.getAll()
+  }
+  
+  /**
+   * Get all token created events
+   */
+  getAllTokenCreatedEvents(): TokenCreated[] {
+    return this.createdStore.getAll()
+  }
+  
+  /**
+   * Get all token completed events
+   */
+  getAllTokenCompletedEvents(): TokenCompleted[] {
+    return this.completedStore.getAll()
+  }
+  
+  /**
    * Creates a new token entity and saves it to the store
    */
   async createToken(params: {
@@ -144,9 +165,23 @@ export class TokenService {
     slot: number
     timestamp: Date
   }): Promise<TokenCreated> {
-    const created = new TokenCreated(params)
-    await this.createdStore.save(created)
-    return created
+    // Ensure timestamp is properly formatted
+    let eventTimestamp = params.timestamp;
+    if (!(params.timestamp instanceof Date)) {
+      // If timestamp appears to be in seconds (pre-2021), convert to milliseconds
+      if (typeof params.timestamp === 'number' && params.timestamp < 1600000000000) {
+        eventTimestamp = new Date(params.timestamp * 1000);
+      } else {
+        eventTimestamp = new Date(params.timestamp);
+      }
+    }
+    
+    const created = new TokenCreated({
+      ...params,
+      timestamp: eventTimestamp
+    });
+    await this.createdStore.save(created);
+    return created;
   }
   
   /**
@@ -159,9 +194,23 @@ export class TokenService {
     slot: number
     timestamp: Date
   }): Promise<TokenCompleted> {
-    const completed = new TokenCompleted(params)
-    await this.completedStore.save(completed)
-    return completed
+    // Ensure timestamp is properly formatted
+    let eventTimestamp = params.timestamp;
+    if (!(params.timestamp instanceof Date)) {
+      // If timestamp appears to be in seconds (pre-2021), convert to milliseconds
+      if (typeof params.timestamp === 'number' && params.timestamp < 1600000000000) {
+        eventTimestamp = new Date(params.timestamp * 1000);
+      } else {
+        eventTimestamp = new Date(params.timestamp);
+      }
+    }
+    
+    const completed = new TokenCompleted({
+      ...params,
+      timestamp: eventTimestamp
+    });
+    await this.completedStore.save(completed);
+    return completed;
   }
   
   /**

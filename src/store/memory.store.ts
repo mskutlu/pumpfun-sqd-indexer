@@ -105,28 +105,46 @@ export class StoreManager {
   }
   
   /**
-   * Save all entities in memory stores to the database
+   * Save all entities in memory stores to the database with optimized batching
    */
   async save(): Promise<void> {
-    // First save non-event entities
+    const OPTIMAL_BATCH_SIZE = 2000; // Larger batch size for better performance
+    
+    // First collect all entities by type to minimize database round-trips
+    const nonEventEntities: Record<string, any[]> = {};
+    const eventEntities: Record<string, any[]> = {};
+    
+    // Organize entities by type
     for (const [name, store] of this.stores.entries()) {
-      if (!store.isEventType) {
-        const entities = store.getAll()
-        if (entities.length > 0) {
-          console.log(`Saving ${entities.length} ${name} entities`)
-          await this.ctx.store.save(entities)
-        }
+      const entities = store.getAll();
+      if (entities.length === 0) continue;
+      
+      if (store.isEventType) {
+        eventEntities[name] = entities;
+      } else {
+        nonEventEntities[name] = entities;
       }
     }
     
-    // Then save event entities which may reference the non-event entities
-    for (const [name, store] of this.stores.entries()) {
-      if (store.isEventType) {
-        const entities = store.getAll()
-        if (entities.length > 0) {
-          console.log(`Saving ${entities.length} ${name} entities`)
-          await this.ctx.store.save(entities)
-        }
+    // Process non-event entities first (these are typically referenced by events)
+    for (const [name, entities] of Object.entries(nonEventEntities)) {
+      console.log(`Saving ${entities.length} ${name} entities`);
+      
+      // Process in optimized batches
+      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
+        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
+        await this.ctx.store.save(batch);
+      }
+    }
+    
+    // Then process event entities that may reference the non-event entities
+    for (const [name, entities] of Object.entries(eventEntities)) {
+      console.log(`Saving ${entities.length} ${name} entities`);
+      
+      // Process in optimized batches
+      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
+        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
+        await this.ctx.store.save(batch);
       }
     }
   }

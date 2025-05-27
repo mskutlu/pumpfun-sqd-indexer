@@ -22,7 +22,7 @@ export class TradeService {
   ) {
     this.store = storeManager.getStore<Trade>("Trade")
   }
-  
+
   /**
    * Flush any pending trade entities to the database
    */
@@ -71,6 +71,18 @@ export class TradeService {
     if (typeof paramOrTxId === 'object') {
       const params = paramOrTxId;
       // Create trade entity with given params
+      // Ensure timestamp is a proper Date object
+      let tradeTimestamp = params.timestamp;
+      // If it's not a Date object already, ensure it's properly converted
+      if (!(params.timestamp instanceof Date)) {
+        // If timestamp appears to be in seconds (pre-2021), convert to milliseconds
+        if (typeof params.timestamp === 'number' && params.timestamp < 1600000000000) {
+          tradeTimestamp = new Date(params.timestamp * 1000);
+        } else {
+          tradeTimestamp = new Date(params.timestamp);
+        }
+      }
+      
       const trade = new Trade({
         id: params.id,
         token: params.token,
@@ -83,7 +95,7 @@ export class TradeService {
         realSolReserves: params.realSolReserves,
         realTokenReserves: params.realTokenReserves,
         slot: params.slot,
-        timestamp: params.timestamp
+        timestamp: tradeTimestamp
       });
       
       await this.store.save(trade);
@@ -298,7 +310,7 @@ export class TradeService {
       }
       
     } catch (error) {
-      console.log('txSignature', txSignature)
+      console.error('Error processing trade instruction:', error)
     }
   }
 }

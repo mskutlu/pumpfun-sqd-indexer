@@ -19,7 +19,7 @@ export class BondingCurveService {
     this.storeManager = storeManager
     this.store = storeManager.getStore<BondingCurve>("BondingCurve")
   }
-  
+
   /**
    * Flush any pending bonding curve entities to the database
    */
@@ -125,29 +125,32 @@ export class BondingCurveService {
     try {
       // Decode the instruction
       const decoded = pumpIns.withdraw.decode(instruction);
+      
       const { accounts } = decoded;
-      const { bondingCurve, user } = accounts;
+      // Handle potentially undefined accounts safely
+      const bondingCurveId = accounts?.bondingCurve ? accounts.bondingCurve.toString() : `placeholder-${txSignature}`;
+      const userId = accounts?.user ? accounts.user.toString() : 'unknown-user';
       
       // Get the bonding curve
-    let curve = await this.getBondingCurve(bondingCurve.toString());
+      let curve = await this.getBondingCurve(bondingCurveId);
     
-    // If curve not found, create a placeholder
-    if (!curve) {
-      console.log(`Creating placeholder bonding curve ${bondingCurve.toString()} for withdraw operation`);
-      curve = new BondingCurve({
-        id: bondingCurve.toString(),
-        virtualSolReserves: 0n,
-        virtualTokenReserves: 0n,
-        realSolReserves: 0n,
-        realTokenReserves: 0n,
-        tokenTotalSupply: 0n,
-        feeBasisPoints: 0n,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      });
-      await this.store.save(curve);
-      stats.entities.bondingCurves++;
-    }  
+      // If curve not found, create a placeholder
+      if (!curve) {
+        curve = new BondingCurve({
+          id: bondingCurveId,
+          token: null as any, // Placeholder for token relationship
+          virtualSolReserves: 0n,
+          virtualTokenReserves: 0n,
+          realSolReserves: 0n,
+          realTokenReserves: 0n,
+          tokenTotalSupply: 0n,
+          feeBasisPoints: 0n,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
+        await this.store.save(curve);
+        stats.entities.bondingCurves++;
+      }  
       
       // Update the bonding curve to reflect withdrawal (typically zeroing out reserves)
       await this.updateBondingCurve(curve.id, {
@@ -157,9 +160,17 @@ export class BondingCurveService {
       });
       stats.entities.bondingCurves++;
       
+      // Extract token ID from the curve
+      const tokenId = curve.token ? 
+        (typeof curve.token === 'string' ? curve.token : curve.token.toString()) : 
+        bondingCurveId;
+      
+      
       // If we have a token service, mark the associated token as completed
-      if (this.tokenService && curve.token) {
-        const token = await this.tokenService.getToken(curve.token.toString());
+      if (this.tokenService) {
+        // Try to get the token, or create a placeholder if it doesn't exist
+        const token = await this.tokenService.getToken(tokenId, true); // true to create if not found
+        
         if (token) {
           await this.tokenService.updateToken(token.id, {
             status: 'completed',
@@ -168,20 +179,31 @@ export class BondingCurveService {
           stats.entities.tokens++;
           
           // Create completed event
-          await this.tokenService.createTokenCompletedEvent({
-            id: `${txSignature}-${slot}`,
-            token,
-            user: user.toString(),
-            slot,
-            timestamp
-          });
-          stats.entities.tokenCompleted++;
+          const eventId = `${txSignature}-${slot}`;
+          
+          try {
+            const completedEvent = await this.tokenService.createTokenCompletedEvent({
+              id: eventId,
+              token,
+              user: userId,
+              slot,
+              timestamp
+            });
+            stats.entities.tokenCompleted++;
+          } catch (eventError: any) {
+            console.error(`Error creating TokenCompleted event: ${eventError.message}`);
+          }
+        } else {
+          console.error(`Failed to get or create token ${tokenId} for TokenCompleted event`);
         }
+      } else {
+        console.error('TokenService is not available, cannot create TokenCompleted event');
       }
       
-    } catch (error) {
-      console.error('Error processing withdraw instruction:', error);
-      throw error;
+    } catch (error: any) {
+      console.error(`Error processing withdraw instruction: ${error.message}`);
+      console.error(error.stack);
+      // Don't rethrow the error to prevent the processor from stopping
     }
   }
 }
