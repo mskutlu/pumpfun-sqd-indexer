@@ -1,5 +1,5 @@
 import { BondingCurve } from "../model"
-import { MemoryStore, StoreManager } from "../store/memory.store"
+import { StoreWithCache } from '@belopash/typeorm-store'
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 import { TokenService } from "./token.service"
@@ -9,26 +9,21 @@ import { TokenService } from "./token.service"
  * in-memory and the final state is persisted at the end of the batch.
  */
 export class BondingCurveService {
-  private readonly store: MemoryStore<BondingCurve>
-  private readonly storeManager: StoreManager
-
   constructor(
-    storeManager: StoreManager,
+    private readonly store: StoreWithCache,
     private readonly tokenService?: TokenService
-  ) {
-    this.storeManager = storeManager
-    this.store = storeManager.getStore<BondingCurve>("BondingCurve")
-  }
+  ) {}
+
 
   /**
-   * Flush any pending bonding curve entities to the database
+   * Flush is now a no-op since StoreWithCache handles batching automatically
    */
   async flush(): Promise<void> {
-    await this.store.flush();
+    // No-op as StoreWithCache handles batching
   }
   
   /**
-   * Creates a new bonding curve entity
+   * Creates a new bonding curve entity using StoreWithCache's optimized methods
    */
   async createBondingCurve(params: {
     id: string
@@ -42,29 +37,59 @@ export class BondingCurveService {
     createdAt: Date
     updatedAt: Date
   }): Promise<BondingCurve> {
-    let curve = await this.store.find(params.id)
-    if (curve) return curve // Already exists
+    // Use StoreWithCache's defer to optimize database access
+    this.store.defer(BondingCurve, params.id)
     
-    curve = new BondingCurve(params)
-    await this.store.save(curve)
-    return curve
+    try {
+      // Use getOrInsert for optimized entity creation/retrieval
+      return await this.store.getOrInsert(BondingCurve, params.id, () => {
+        return new BondingCurve(params)
+      })
+    } catch (error) {
+      // Fallback to direct insert on failure
+      const curve = new BondingCurve(params)
+      await this.store.insert(curve)
+      return curve
+    }
   }
   
   /**
    * Gets a bonding curve by ID
    */
   async getBondingCurve(id: string): Promise<BondingCurve | undefined> {
-    // Use the optimized find method which checks both memory and database
-    return await this.store.find(id);
+    // Use defer to optimize database access
+    this.store.defer(BondingCurve, id)
+    
+    try {
+      return await this.store.get(BondingCurve, id)
+    } catch (error) {
+      return undefined
+    }
   }
   
   /**
    * Gets bonding curve by token ID
    */
   async getBondingCurveByToken(tokenId: string): Promise<BondingCurve | undefined> {
-    // Find the bonding curve associated with a specific token
-    const curves = this.store.getAll()
-    return curves.find(curve => curve.token && curve.token.id === tokenId)
+    // Find bonding curve by token ID using a database query instead of in-memory search
+    try {
+      const curves = await this.store.find(BondingCurve, {
+        where: { token: { id: tokenId } },
+        relations: { token: true }
+      })
+      return curves.length > 0 ? curves[0] : undefined
+    } catch (error) {
+      // Try a more basic query if the relational query fails
+      try {
+        // Get all curves and filter manually
+        const allCurves = await this.store.find(BondingCurve, {});
+        // Return the first one that matches by tokenId if token field is populated
+        return allCurves.find(curve => curve.token && curve.token.id === tokenId);
+      } catch (fallbackError) {
+        console.warn(`Failed to get bonding curve by token ${tokenId}:`, fallbackError);
+        return undefined;
+      }
+    }
   }
   
   /**
@@ -79,24 +104,33 @@ export class BondingCurveService {
     feeBasisPoints?: bigint
     updatedAt: Date
   }): Promise<BondingCurve | undefined> {
-    const curve = await this.store.find(curveId)
-    if (!curve) return undefined
+    // Use defer to optimize database access
+    this.store.defer(BondingCurve, curveId)
     
-    if (params.virtualSolReserves !== undefined) curve.virtualSolReserves = params.virtualSolReserves
-    if (params.virtualTokenReserves !== undefined) curve.virtualTokenReserves = params.virtualTokenReserves
-    if (params.realSolReserves !== undefined) curve.realSolReserves = params.realSolReserves
-    if (params.realTokenReserves !== undefined) curve.realTokenReserves = params.realTokenReserves
-    if (params.tokenTotalSupply !== undefined) curve.tokenTotalSupply = params.tokenTotalSupply
-    if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
-    curve.updatedAt = params.updatedAt
-    
-    // Use save() which will handle determining if it's an update
-    await this.store.save(curve)
-    return curve
+    try {
+      // Get the curve
+      const curve = await this.store.get(BondingCurve, curveId)
+      if (!curve) return undefined
+      
+      // Update fields
+      if (params.virtualSolReserves !== undefined) curve.virtualSolReserves = params.virtualSolReserves
+      if (params.virtualTokenReserves !== undefined) curve.virtualTokenReserves = params.virtualTokenReserves
+      if (params.realSolReserves !== undefined) curve.realSolReserves = params.realSolReserves
+      if (params.realTokenReserves !== undefined) curve.realTokenReserves = params.realTokenReserves
+      if (params.tokenTotalSupply !== undefined) curve.tokenTotalSupply = params.tokenTotalSupply
+      if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
+      curve.updatedAt = params.updatedAt
+      
+      // Use upsert for optimized updates
+      await this.store.upsert(curve)
+      return curve
+    } catch (error) {
+      return undefined
+    }
   }
 
-  getAllCurves() {
-    return this.store.getAll()
+  async getAllCurves(): Promise<BondingCurve[]> {
+    return await this.store.find(BondingCurve, {})
   }
   
   /**
@@ -134,7 +168,7 @@ export class BondingCurveService {
           createdAt: timestamp,
           updatedAt: timestamp
         });
-        await this.store.save(curve);
+        await this.store.insert(curve);
         stats.entities.bondingCurves++;
       }  
       

@@ -1,5 +1,5 @@
 import { GlobalConfig } from "../model"
-import { MemoryStore, StoreManager } from "../store/memory.store"
+import { StoreWithCache } from '@belopash/typeorm-store'
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 
@@ -8,23 +8,21 @@ import * as pumpIns from "../abi/pump-fun/instructions"
  * GlobalConfig PDA.
  */
 export class GlobalService {
-  private readonly store: MemoryStore<GlobalConfig>
-  private readonly storeManager: StoreManager
+  private readonly store: StoreWithCache
 
-  constructor(storeManager: StoreManager) {
-    this.storeManager = storeManager
-    this.store = storeManager.getStore<GlobalConfig>("GlobalConfig")
+  constructor(store: StoreWithCache) {
+    this.store = store
   }
 
   /**
-   * Flush any pending global config entities to the database
+   * Flush is now a no-op since StoreWithCache handles batching automatically
    */
   async flush(): Promise<void> {
-    await this.store.flush();
+    // No-op as StoreWithCache handles batching
   }
   
   /**
-   * Creates or updates the global config
+   * Creates or updates the global config using StoreWithCache's optimized getOrInsert and upsert
    */
   async setGlobalConfig(params: {
     id: string
@@ -33,26 +31,38 @@ export class GlobalService {
     createdAt: Date
     updatedAt: Date
   }): Promise<GlobalConfig> {
-    // Use the optimized find method which checks both memory and database
-    let config = await this.store.find(params.id)
+    // Use StoreWithCache's defer to optimize database access
+    this.store.defer(GlobalConfig, params.id)
     
-    if (!config) {
-      // Create new global config if not found
-      config = new GlobalConfig(params)
-    } else {
-      // Update existing config
+    // Use getOrInsert for optimized entity creation/retrieval
+    const config = await this.store.getOrInsert(GlobalConfig, params.id, () => {
+      return new GlobalConfig({
+        id: params.id,
+        feeRecipient: params.feeRecipient,
+        feeBasisPoints: params.feeBasisPoints,
+        createdAt: params.createdAt,
+        updatedAt: params.updatedAt
+      })
+    })
+    
+    // Update existing config if needed
+    if (config.feeRecipient !== params.feeRecipient || 
+        config.feeBasisPoints !== params.feeBasisPoints || 
+        config.updatedAt !== params.updatedAt) {
+      
       config.feeRecipient = params.feeRecipient
       config.feeBasisPoints = params.feeBasisPoints
       config.updatedAt = params.updatedAt
+      
+      // Use upsert for optimized updates
+      await this.store.upsert(config)
     }
     
-    // Save will automatically determine if it's an insert or update
-    await this.store.save(config)
     return config
   }
 
-  getAll(): GlobalConfig[] {
-    return this.store.getAll()
+  async getAll(): Promise<GlobalConfig[]> {
+    return await this.store.find(GlobalConfig, {})
   }
 
   /**

@@ -1,5 +1,5 @@
 import { Trade, PumpToken } from "../model"
-import { MemoryStore, StoreManager } from "../store/memory.store"
+import { StoreWithCache } from '@belopash/typeorm-store'
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 import * as indexes from "../abi/pump-fun/index"
@@ -7,8 +7,6 @@ import { TokenService } from "./token.service"
 import { BondingCurveService } from "./bondingCurve.service"
 
 export class TradeService {
-  private readonly store: MemoryStore<Trade>
-
   private txLogCounter: { [key: string]: number } = {}
   // Map to track trades by transaction ID prefix
   private readonly tradesByTxId = new Map<string, Trade[]>()
@@ -16,18 +14,16 @@ export class TradeService {
   private readonly pendingLogData = new Map<string, boolean>()
 
   constructor(
-    private readonly storeManager: StoreManager,
+    private readonly store: StoreWithCache,
     private readonly tokenService?: TokenService,
     private readonly curveService?: BondingCurveService
-  ) {
-    this.store = storeManager.getStore<Trade>("Trade")
-  }
+  ) {}
 
   /**
-   * Flush any pending trade entities to the database
+   * Flush is now a no-op since StoreWithCache handles batching automatically
    */
   async flush(): Promise<void> {
-    await this.store.flush();
+    // No-op as StoreWithCache handles batching
   }
 
   private nextIndex(txId: string): number {
@@ -98,7 +94,13 @@ export class TradeService {
         timestamp: tradeTimestamp
       });
       
-      await this.store.save(trade);
+      try {
+        // Use insert for better performance with events
+        await this.store.insert(trade);
+      } catch (error) {
+        // Fallback to upsert if insert fails
+        await this.store.upsert(trade);
+      }
       
       // Add to our txId index for quick lookups
       if (!this.tradesByTxId.has(params.txSignature)) {
@@ -170,8 +172,8 @@ export class TradeService {
   /**
    * Get all trades from storage
    */
-  getAllTrades(): Trade[] {
-    return this.store.getAll();
+  async getAllTrades(): Promise<Trade[]> {
+    return await this.store.find(Trade, {})
   }
 
   /**
@@ -239,75 +241,92 @@ export class TradeService {
       }
 
       // We need to get the token for this trade
-      let token: PumpToken | undefined;
-      if (this.tokenService) {
-        token = await this.tokenService.getToken(mint.toString(), true); // Create placeholder if needed
-      }
-
-      if (!token) {
-        console.error(`Failed to get or create token ${mint.toString()} for trade event`);
-        return;
-      }
-
-      // Create the trade record
-      await this.createTrade({
-        id: `${txSignature}-${this.nextIndex(txSignature)}`,
-        token,
-        user: user.toString(),
-        isBuy,
-        solAmount,
-        tokenAmount,
-        virtualSolReserves,
-        virtualTokenReserves,
-        realSolReserves,
-        realTokenReserves,
-        txSignature,
-        slot,
-        timestamp
-      });
-      stats.entities.trades++;
-
-      // Update the bonding curve if available
-      if (this.curveService) {
-        // First try to get by direct account reference from the decoded instruction
-        let bondingCurve = bondingCurveAccount ?
-          await this.curveService.getBondingCurve(bondingCurveAccount.toString()) : undefined;
-
-        // If not found by account, try to find by token ID as fallback
-        if (!bondingCurve && token) {
-          bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+      try {
+        let token: PumpToken | undefined;
+        if (this.tokenService) {
+          // Safely get or create token with proper error handling
+          token = await this.tokenService.getToken(mint.toString(), true); // Create placeholder if needed
         }
 
-        if (bondingCurve) {
-          // Use the existing real reserves as our starting point
-          realSolReserves = bondingCurve.realSolReserves;
-          realTokenReserves = bondingCurve.realTokenReserves;
-          
-          // Update real reserves based on trade activity according to AMM logic
-          if (isBuy) {
-            // When buying: SOL goes in, tokens come out
-            realSolReserves = realSolReserves + solAmount;
-            realTokenReserves = realTokenReserves - tokenAmount;
-          } else {
-            // When selling: tokens go in, SOL comes out
-            realSolReserves = realSolReserves - solAmount;
-            realTokenReserves = realTokenReserves + tokenAmount;
+        if (!token) {
+          console.warn(`Token ${mint.toString()} not found for trade event - skipping trade processing`);
+          return;
+        }
+        
+        // Only proceed with trade creation if token exists
+        // Create the trade record
+        await this.createTrade({
+          id: `${txSignature}-${this.nextIndex(txSignature)}`,
+          token,
+          user: user.toString(),
+          isBuy,
+          solAmount,
+          tokenAmount,
+          virtualSolReserves,
+          virtualTokenReserves,
+          realSolReserves,
+          realTokenReserves,
+          txSignature,
+          slot,
+          timestamp
+        });
+        stats.entities.trades++;
+
+        // Update the bonding curve if available
+        if (this.curveService) {
+          try {
+            // First try to get by direct account reference from the decoded instruction
+            let bondingCurve = bondingCurveAccount ?
+              await this.curveService.getBondingCurve(bondingCurveAccount.toString()) : undefined;
+
+            // If not found by account, try to find by token ID as fallback
+            if (!bondingCurve && token) {
+              bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+            }
+
+            if (bondingCurve) {
+              // Use the existing real reserves as our starting point
+              realSolReserves = bondingCurve.realSolReserves;
+              realTokenReserves = bondingCurve.realTokenReserves;
+              
+              // Update real reserves based on trade activity according to AMM logic
+              if (isBuy) {
+                // When buying: SOL goes in, tokens come out
+                realSolReserves = realSolReserves + solAmount;
+                realTokenReserves = realTokenReserves - tokenAmount;
+              } else {
+                // When selling: tokens go in, SOL comes out
+                realSolReserves = realSolReserves - solAmount;
+                realTokenReserves = realTokenReserves + tokenAmount;
+              }
+              
+              // Ensure we don't go negative
+              if (realSolReserves < 0n) realSolReserves = 0n;
+              if (realTokenReserves < 0n) realTokenReserves = 0n;
+              
+              // Update reserves with safer error handling
+              try {
+                await this.curveService.updateBondingCurve(bondingCurve.id, {
+                  virtualSolReserves,
+                  virtualTokenReserves,
+                  realSolReserves,
+                  realTokenReserves,
+                  updatedAt: timestamp
+                });
+                stats.entities.bondingCurves++;
+              } catch (curveUpdateError) {
+                console.warn(`Failed to update bonding curve ${bondingCurve.id}: ${curveUpdateError}`);
+              }
+            }
+          } catch (curveError) {
+            console.warn(`Error processing bonding curve for trade: ${curveError}`);
           }
-          
-          // Ensure we don't go negative
-          if (realSolReserves < 0n) realSolReserves = 0n;
-          if (realTokenReserves < 0n) realTokenReserves = 0n;
-          // Update reserves
-          await this.curveService.updateBondingCurve(bondingCurve.id, {
-            virtualSolReserves,
-            virtualTokenReserves,
-            realSolReserves,
-            realTokenReserves,
-            updatedAt: timestamp
-          });
-          stats.entities.bondingCurves++;
         }
+      } catch (tokenError) {
+        console.warn(`Error processing token ${mint.toString()} for trade: ${tokenError}`);
       }
+
+      // This section was moved into the try block above
       
     } catch (error) {
       console.error('Error processing trade instruction:', error)

@@ -1,6 +1,6 @@
 import {run} from '@subsquid/batch-processor'
 import {DataSourceBuilder, SolanaRpcClient} from '@subsquid/solana-stream'
-import {TypeormDatabase} from '@subsquid/typeorm-store'
+import {TypeormDatabaseWithCache} from '@belopash/typeorm-store'
 import {initialize, setParams, create, buy, sell, withdraw, tradeEventInstruction} from './abi/pump-fun/instructions'
 import {PROGRAM_ID, EVENT_AUTHORITY} from './abi/pump-fun/index'
 import { handle } from './processor'
@@ -58,7 +58,7 @@ const dataSource = new DataSourceBuilder()
         }
     }).build()
 
-// Define the database
-const database = new TypeormDatabase({})
+// Define the database with cache for improved performance and avoiding transaction conflicts
+const database = new TypeormDatabaseWithCache({supportHotBlocks: true})
 run(dataSource, database, handle)
 

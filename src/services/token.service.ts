@@ -3,7 +3,7 @@ import {
   TokenCreated,
   TokenCompleted
 } from "../model"
-import { MemoryStore, StoreManager } from "../store/memory.store"
+import { StoreWithCache } from '@belopash/typeorm-store'
 import { BondingCurveService } from "./bondingCurve.service"
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
@@ -11,62 +11,61 @@ import * as indexes from "../abi/pump-fun/index"
 import { GlobalService } from "./global.service"
 
 /**
- * Sanitize a string by removing null bytes and non-UTF8 characters
- * that would cause PostgreSQL errors
+ * Sanitize a string by removing null bytes, non-UTF8 characters,
+ * trimming whitespace, and validating input to prevent PostgreSQL errors
  */
-function sanitizeString(input: any): string {
+function sanitizeString(input: string | null | undefined): string {
   if (input === null || input === undefined) return '';
   
-  // Convert to string if it's not already
-  const str = input.toString();
+  // Convert to string if it's not already and trim whitespace
+  const str = input.toString().trim();
+  
+  // If it's empty after trimming, return empty string
+  if (str.length === 0) return '';
+  
+  // If it's extremely long, truncate it
+  const sanitized = str.length > 100 ? str.substring(0, 100) : str;
   
   // Remove null bytes and other control characters that PostgreSQL doesn't like
-  return str.replace(/\u0000|[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  return sanitized.replace(/\u0000|[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
 }
 
 export class TokenService {
-  private readonly tokenStore: MemoryStore<PumpToken>
-  private readonly createdStore: MemoryStore<TokenCreated>
-  private readonly completedStore: MemoryStore<TokenCompleted>
-
   constructor(
-    private readonly storeManager: StoreManager,
+    private readonly store: StoreWithCache,
     private readonly curveService: BondingCurveService,
     private readonly globalService?: GlobalService
-  ) {
-    this.tokenStore = storeManager.getStore<PumpToken>("PumpToken")
-    this.createdStore = storeManager.getStore<TokenCreated>("TokenCreated")
-    this.completedStore = storeManager.getStore<TokenCompleted>("TokenCompleted")
-  }
+  ) {}
+
   
   /**
-   * Flush any pending token entities to the database
+   * Flush is now a no-op since StoreWithCache handles batching automatically
    */
   async flush(): Promise<void> {
-    await this.tokenStore.flush();
-    await this.createdStore.flush();
-    await this.completedStore.flush();
+    // No-op as StoreWithCache handles batching
   }
   
   /**
    * Get all tokens
    */
-  getAllTokens(): PumpToken[] {
-    return this.tokenStore.getAll()
+  async getAllTokens(): Promise<PumpToken[]> {
+    return await this.store.find(PumpToken, {})
   }
+  
+  // Methods for TokenEvent and TokenHolding have been removed as these entities don't exist in the model
   
   /**
    * Get all token created events
    */
-  getAllTokenCreatedEvents(): TokenCreated[] {
-    return this.createdStore.getAll()
+  async getAllTokenCreatedEvents(): Promise<TokenCreated[]> {
+    return await this.store.find(TokenCreated, {})
   }
   
   /**
    * Get all token completed events
    */
-  getAllTokenCompletedEvents(): TokenCompleted[] {
-    return this.completedStore.getAll()
+  async getAllTokenCompletedEvents(): Promise<TokenCompleted[]> {
+    return await this.store.find(TokenCompleted, {})
   }
   
   /**
@@ -82,12 +81,20 @@ export class TokenService {
     createdAt: Date
     updatedAt: Date
   }): Promise<PumpToken> {
-    let token = await this.tokenStore.find(params.id)
-    if (token) return token // already created inside same batch
+    // Use StoreWithCache's defer to optimize database access
+    this.store.defer(PumpToken, params.id)
     
-    token = new PumpToken(params)
-    await this.tokenStore.save(token)
-    return token
+    try {
+      // Use getOrInsert for optimized entity creation/retrieval
+      return await this.store.getOrInsert(PumpToken, params.id, () => {
+        return new PumpToken(params)
+      })
+    } catch (error) {
+      // Fallback to direct insert on failure
+      const token = new PumpToken(params)
+      await this.store.insert(token)
+      return token
+    }
   }
   
   /**
@@ -97,25 +104,65 @@ export class TokenService {
    * @returns The token or undefined if not found and not creating
    */
   async getToken(mint: string, createIfMissing = false): Promise<PumpToken | undefined> {
-    // Use the optimized find method which checks both memory and database
-    let token = await this.tokenStore.find(mint);
-    
-    // Create a placeholder token if requested and not found
-    if (!token && createIfMissing) {
-      token = new PumpToken({
-        id: mint,
-        name: mint,
-        symbol: mint,
-        decimals: 9,
-        creator: mint,
-        status: 'active',
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-      await this.tokenStore.save(token);
+    // Sanitize mint address - common source of errors
+    const tokenId = sanitizeString(mint);
+    if (!tokenId) {
+      console.warn("Invalid token mint address");
+      return undefined;
     }
     
-    return token;
+    // Use defer to optimize database access
+    this.store.defer(PumpToken, tokenId)
+    
+    if (createIfMissing) {
+      try {
+        // First try to get
+        try {
+          const token = await this.store.get(PumpToken, tokenId)
+          if (token) return token
+        } catch (getError) {
+          // Ignore get error and continue to create
+        }
+        
+        // Create new token with sanitized fields
+        const newToken = new PumpToken({
+          id: tokenId,
+          name: tokenId.substring(0, 12) + '...', // Truncate for safety
+          symbol: tokenId.substring(0, 6),         // Short symbol for safety
+          decimals: 9,
+          creator: tokenId,
+          status: 'active',
+          createdAt: new Date(),
+          updatedAt: new Date()
+        })
+        
+        // Try insert, fall back to upsert
+        try {
+          await this.store.insert(newToken)
+          return newToken
+        } catch (insertError) {
+          // If insert fails, try upsert
+          try {
+            await this.store.upsert(newToken)
+            return newToken
+          } catch (upsertError) {
+            console.warn(`Failed to create token ${tokenId}:`, upsertError)
+            return undefined
+          }
+        }
+      } catch (error) {
+        console.warn(`Error in getToken for ${tokenId}:`, error)
+        return undefined
+      }
+    } else {
+      // Just try to get the token
+      try {
+        return await this.store.get(PumpToken, tokenId)
+      } catch (error) {
+        console.warn(`Error fetching token ${tokenId}:`, error)
+        return undefined
+      }
+    }
   }
   
   /**
@@ -125,15 +172,24 @@ export class TokenService {
     status?: string
     updatedAt: Date
   }): Promise<PumpToken | undefined> {
-    const token = await this.tokenStore.find(tokenId)
-    if (!token) return undefined
-    
-    if (params.status) token.status = params.status
-    token.updatedAt = params.updatedAt
-    
-    // Just use save() - it will automatically determine if it's an update
-    await this.tokenStore.save(token)
-    return token
+    try {
+      // Use defer to optimize database access
+      this.store.defer(PumpToken, tokenId)
+      
+      // Get the token
+      const token = await this.store.get(PumpToken, tokenId)
+      if (!token) return undefined
+      
+      // Update fields
+      if (params.status) token.status = params.status
+      token.updatedAt = params.updatedAt
+      
+      // Use upsert for optimized updates
+      await this.store.upsert(token)
+      return token
+    } catch (error) {
+      return undefined
+    }
   }
   
   /**
@@ -158,12 +214,23 @@ export class TokenService {
       }
     }
     
-    const created = new TokenCreated({
-      ...params,
-      timestamp: eventTimestamp
-    });
-    await this.createdStore.save(created);
-    return created;
+    // For event entities, use direct insert since they're new records and don't need upserts
+    try {
+      const created = new TokenCreated({
+        ...params,
+        timestamp: eventTimestamp
+      });
+      await this.store.insert(created);
+      return created;
+    } catch (error) {
+      // Fallback to slower but safer upsert if insert fails
+      const created = new TokenCreated({
+        ...params,
+        timestamp: eventTimestamp
+      });
+      await this.store.upsert(created);
+      return created;
+    }
   }
   
   /**
@@ -187,12 +254,23 @@ export class TokenService {
       }
     }
     
-    const completed = new TokenCompleted({
-      ...params,
-      timestamp: eventTimestamp
-    });
-    await this.completedStore.save(completed);
-    return completed;
+    // For event entities, use direct insert since they're new records and don't need upserts
+    try {
+      const completed = new TokenCompleted({
+        ...params,
+        timestamp: eventTimestamp
+      });
+      await this.store.insert(completed);
+      return completed;
+    } catch (error) {
+      // Fallback to slower but safer upsert if insert fails
+      const completed = new TokenCompleted({
+        ...params,
+        timestamp: eventTimestamp
+      });
+      await this.store.upsert(completed);
+      return completed;
+    }
   }
   
   /**
