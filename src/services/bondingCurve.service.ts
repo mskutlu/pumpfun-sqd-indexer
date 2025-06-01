@@ -54,23 +54,8 @@ export class BondingCurveService {
    * Gets a bonding curve by ID
    */
   async getBondingCurve(id: string): Promise<BondingCurve | undefined> {
-    // First check in memory
-    let curve = await this.store.find(id);
-    
-    // If not in memory, try to find in database
-    if (!curve) {
-      try {
-        curve = await this.storeManager.ctx.store.get(BondingCurve, id);
-        if (curve) {
-          // Add to memory store for future access
-          await this.store.save(curve);
-        }
-      } catch (err) {
-        console.error(`Error loading bonding curve ${id} from database:`, err);
-      }
-    }
-    
-    return curve;
+    // Use the optimized find method which checks both memory and database
+    return await this.store.find(id);
   }
   
   /**
@@ -105,7 +90,8 @@ export class BondingCurveService {
     if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
     curve.updatedAt = params.updatedAt
     
-    await this.store.update(curve)
+    // Use save() which will handle determining if it's an update
+    await this.store.save(curve)
     return curve
   }
 

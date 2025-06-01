@@ -35,14 +35,8 @@ export class TokenService {
     private readonly globalService?: GlobalService
   ) {
     this.tokenStore = storeManager.getStore<PumpToken>("PumpToken")
-    this.createdStore = storeManager.getStore<TokenCreated>(
-      "TokenCreated",
-      true
-    )
-    this.completedStore = storeManager.getStore<TokenCompleted>(
-      "TokenCompleted",
-      true
-    )
+    this.createdStore = storeManager.getStore<TokenCreated>("TokenCreated")
+    this.completedStore = storeManager.getStore<TokenCompleted>("TokenCompleted")
   }
   
   /**
@@ -103,21 +97,8 @@ export class TokenService {
    * @returns The token or undefined if not found and not creating
    */
   async getToken(mint: string, createIfMissing = false): Promise<PumpToken | undefined> {
-    // First check in memory
+    // Use the optimized find method which checks both memory and database
     let token = await this.tokenStore.find(mint);
-    
-    // If not in memory, try to find in database
-    if (!token) {
-      try {
-        token = await this.storeManager.ctx.store.get(PumpToken, mint);
-        if (token) {
-          // Add to memory store for future access
-          await this.tokenStore.save(token);
-        }
-      } catch (err) {
-        console.error(`Error loading token ${mint} from database:`, err);
-      }
-    }
     
     // Create a placeholder token if requested and not found
     if (!token && createIfMissing) {
@@ -150,7 +131,8 @@ export class TokenService {
     if (params.status) token.status = params.status
     token.updatedAt = params.updatedAt
     
-    await this.tokenStore.update(token)
+    // Just use save() - it will automatically determine if it's an update
+    await this.tokenStore.save(token)
     return token
   }
   

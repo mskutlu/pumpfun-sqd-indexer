@@ -58,18 +58,7 @@ const dataSource = new DataSourceBuilder()
         }
     }).build()
 
-// Define the database with optimized configuration
-const database = new TypeormDatabase({
-  stateSchema: 'squid_processor',
-  // Increase the isolation level to READ COMMITTED for better throughput
-  isolationLevel: 'READ COMMITTED'
-})
-
-// Set environment variables to improve batch processing performance
-process.env.BATCH_SIZE = '3000'           // Process more blocks per batch
-process.env.BLOCK_CONCURRENCY = '5'       // Process blocks concurrently
-process.env.TYPEORM_BATCH_SIZE = '2000'   // TypeORM bulk insert batch size
-
-// Run the processor
+// Define the database
+const database = new TypeormDatabase({})
 run(dataSource, database, handle)
 

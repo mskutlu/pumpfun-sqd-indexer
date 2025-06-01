@@ -33,34 +33,21 @@ export class GlobalService {
     createdAt: Date
     updatedAt: Date
   }): Promise<GlobalConfig> {
-    // First check in memory
+    // Use the optimized find method which checks both memory and database
     let config = await this.store.find(params.id)
     
-    // If not in memory, try to find in database
     if (!config) {
-      try {
-        config = await this.storeManager.ctx.store.get(GlobalConfig, params.id);
-        if (config) {
-          // Add to memory store for future access
-          await this.store.save(config);
-        }
-      } catch (err) {
-        console.error(`Error loading global config ${params.id} from database:`, err);
-      }
-    }
-    
-    if (!config) {
-      // Create new global config if not found in either memory or database
+      // Create new global config if not found
       config = new GlobalConfig(params)
-      await this.store.save(config)
     } else {
       // Update existing config
       config.feeRecipient = params.feeRecipient
       config.feeBasisPoints = params.feeBasisPoints
       config.updatedAt = params.updatedAt
-      await this.store.update(config)
     }
     
+    // Save will automatically determine if it's an insert or update
+    await this.store.save(config)
     return config
   }
 

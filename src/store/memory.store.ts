@@ -1,150 +1,215 @@
 import { DataHandlerContext } from "@subsquid/batch-processor"
 import { Store } from "@subsquid/typeorm-store"
+import { Entity } from "@subsquid/typeorm-store/lib/store"
 
 /**
- * All entities created/updated within a block batch are kept in RAM and
- * flushed to Postgres once at the end of the batch.
+ * Optimized store that keeps entities in RAM with separate insert and update lists
+ * to improve database operations and reduce transaction conflicts.
  */
 export class MemoryStore<T extends { id: string }> {
-  private readonly map = new Map<string, T>()
-  private readonly events: T[] = []
+  // Lists for database operations - updateList also serves as our cache
+  private readonly insertList = new Map<string, T>()
+  private readonly updateList = new Map<string, T>()
   private manager: StoreManager | null = null
 
-  constructor(private readonly name: string, readonly isEventType = false) {}
+  constructor(private readonly name: string) {}
 
   /**
-   * Set the StoreManager reference to enable direct database flush
+   * Set the StoreManager reference to enable direct database operations
    */
   setManager(manager: StoreManager): void {
     this.manager = manager
   }
 
   /**
+   * Find an entity by ID, first checking in memory and then in database if needed
+   * This is the central find method that all services should use
+   * @param id Entity ID to find
+   * @returns The entity or undefined if not found
+   */
+  async find(id: string): Promise<T | undefined> {
+    // First check in memory (updateList is our cache)
+    const cachedEntity = this.updateList.get(id)
+    if (cachedEntity) {
+      return cachedEntity
+    }
+    
+    // Also check insert list for new entities not yet persisted
+    const newEntity = this.insertList.get(id)
+    if (newEntity) {
+      return newEntity
+    }
+
+    // Not in memory, try database lookup
+    if (this.manager) {
+      try {
+        const entity = await this.manager.ctx.store.get(this.name as any, id)
+        if (entity) {
+          // Add to update list (since it exists in DB)
+          const typedEntity = entity as unknown as T
+          this.updateList.set(id, typedEntity)
+          return typedEntity
+        }
+      } catch (err) {
+        console.error(`Error finding ${this.name} with ID ${id}:`, err)
+      }
+    }
+
+    // Not found anywhere
+    return undefined
+  }
+
+  /**
+   * Save an entity - automatically determines if it's an insert or update
+   * @param entity Entity to save
+   */
+  async save(entity: T): Promise<void> {
+    // Check if this entity already exists in our update list (DB entities)
+    if (this.updateList.has(entity.id)) {
+      // It's an update of an existing entity
+      this.updateList.set(entity.id, entity)
+      return
+    }
+    
+    // If it's in our insert list, update it there
+    if (this.insertList.has(entity.id)) {
+      this.insertList.set(entity.id, entity)
+      return
+    }
+    
+    // Not in our memory lists, check DB if we can
+    if (this.manager) {
+      try {
+        const existsInDb = await this.manager.ctx.store.get(this.name as any, entity.id)
+        if (existsInDb) {
+          // It exists in DB, so it's an update
+          this.updateList.set(entity.id, entity)
+        } else {
+          // Not in DB, so it's an insert
+          this.insertList.set(entity.id, entity)
+        }
+      } catch (err) {
+        // Assume it's new if we can't verify
+        this.insertList.set(entity.id, entity)
+      }
+    } else {
+      // Can't check DB, assume it's new
+      this.insertList.set(entity.id, entity)
+    }
+  }
+
+  /**
+   * Get all entities currently in memory
+   */
+  getAll(): T[] {
+    // Combine entities from both lists
+    const allEntities = [...Array.from(this.updateList.values()), ...Array.from(this.insertList.values())]
+    return allEntities
+  }
+
+  /**
+   * Get counts of pending operations
+   */
+  getCounts(): { total: number, inserts: number, updates: number } {
+    return {
+      total: this.updateList.size + this.insertList.size,
+      inserts: this.insertList.size,
+      updates: this.updateList.size
+    }
+  }
+
+  /**
    * Flush entities in this store to the database
+   * This separates inserts and updates to avoid transaction conflicts
    */
   async flush(): Promise<void> {
     if (!this.manager) {
       throw new Error('Cannot flush store without manager reference')
     }
-    
-    const entities = this.getAll()
-    if (entities.length > 0) {
-      console.log(`Flushing ${entities.length} ${this.name} entities to database`)
-      await this.manager.ctx.store.save(entities)
+
+    // Process all inserts at once
+    const inserts = Array.from(this.insertList.values())
+    if (inserts.length > 0) {
+      console.log(`Inserting ${inserts.length} ${this.name} entities`)
+      try {
+        await this.manager.ctx.store.insert(inserts)
+      } catch (err) {
+        console.error(`Error inserting ${this.name} entities:`, err)
+        // Fall back to individual inserts if batch fails
+        for (const entity of inserts) {
+          try {
+            await this.manager.ctx.store.insert(entity)
+          } catch (innerErr) {
+            console.error(`Error inserting ${this.name} entity ${entity.id}:`, innerErr)
+          }
+        }
+      }
       
-      // Clear memory after flush if it's an event type
-      if (this.isEventType) {
-        this.events.length = 0
+      // Clear the insert list after processing
+      this.insertList.clear()
+    }
+
+    // Process all updates at once
+    const updates = Array.from(this.updateList.values())
+    if (updates.length > 0) {
+      console.log(`Updating ${updates.length} ${this.name} entities`)
+      try {
+        await this.manager.ctx.store.save(updates)
+      } catch (err) {
+        console.error(`Error updating ${this.name} entities:`, err)
+        // Fall back to individual updates if batch fails
+        for (const entity of updates) {
+          try {
+            await this.manager.ctx.store.save(entity)
+          } catch (innerErr) {
+            console.error(`Error updating ${this.name} entity ${entity.id}:`, innerErr)
+          }
+        }
       }
+      
+      // Clear the update list after processing
+      this.updateList.clear()
     }
-  }
-
-  async find(id: string): Promise<T | undefined> {
-    // First check if entity exists in memory
-    const memoryEntity = this.map.get(id)
-    if (memoryEntity) {
-      return memoryEntity
-    }
-    
-    // If not found in memory, return undefined
-    // Each service should handle database fallback by checking memory first using this method
-    // Then falling back to a direct database query if needed, and calling save() on this store
-    // to cache the result for future use
-    return undefined
-  }
-
-  async save(entity: T): Promise<void> {
-    if (this.isEventType) {
-      // For event types, make sure we don't add duplicates with the same ID
-      // Check if we already have an event with this ID
-      const existingIndex = this.events.findIndex(e => e.id === entity.id);
-      if (existingIndex >= 0) {
-        // Replace the existing event
-        this.events[existingIndex] = entity;
-      } else {
-        // Add new event
-        this.events.push(entity);
-      }
-    } else {
-      this.map.set(entity.id, entity)
-    }
-  }
-
-  async update(entity: T): Promise<void> {
-    if (this.isEventType) throw new Error("Cannot update append-only event entities")
-    this.map.set(entity.id, entity)
-  }
-
-  getAll(): T[] {
-    return this.isEventType ? this.events : Array.from(this.map.values())
   }
 }
 
 /**
- * Lazily instantiates `MemoryStore` instances keyed by entity name and exposes
- * the batch `ctx` for DB look-ups when a cache-miss occurs.
+ * Manages MemoryStore instances and coordinates database operations
  */
 export class StoreManager {
   private readonly stores = new Map<string, MemoryStore<any>>()
 
   constructor(public readonly ctx: DataHandlerContext<any, Store>) {}
 
-  getStore<E extends { id: string }>(name: string, isEventType = false): MemoryStore<E> {
+  /**
+   * Get or create a memory store for the specified entity type
+   */
+  getStore<E extends { id: string }>(name: string): MemoryStore<E> {
     let store = this.stores.get(name)
     if (!store) {
-      store = new MemoryStore<E>(name, isEventType)
-      // Set the manager reference so the store can flush directly
+      store = new MemoryStore<E>(name)
       store.setManager(this)
       this.stores.set(name, store)
     }
     return store as MemoryStore<E>
   }
 
+  /**
+   * Get all stores managed by this manager
+   */
   getAllStores(): Map<string, MemoryStore<any>> {
     return this.stores
   }
-  
+
   /**
-   * Save all entities in memory stores to the database with optimized batching
+   * Flush all stores to the database in an optimized order
    */
   async save(): Promise<void> {
-    const OPTIMAL_BATCH_SIZE = 2000; // Larger batch size for better performance
-    
-    // First collect all entities by type to minimize database round-trips
-    const nonEventEntities: Record<string, any[]> = {};
-    const eventEntities: Record<string, any[]> = {};
-    
-    // Organize entities by type
     for (const [name, store] of this.stores.entries()) {
-      const entities = store.getAll();
-      if (entities.length === 0) continue;
-      
-      if (store.isEventType) {
-        eventEntities[name] = entities;
-      } else {
-        nonEventEntities[name] = entities;
-      }
-    }
-    
-    // Process non-event entities first (these are typically referenced by events)
-    for (const [name, entities] of Object.entries(nonEventEntities)) {
-      console.log(`Saving ${entities.length} ${name} entities`);
-      
-      // Process in optimized batches
-      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
-        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
-        await this.ctx.store.save(batch);
-      }
-    }
-    
-    // Then process event entities that may reference the non-event entities
-    for (const [name, entities] of Object.entries(eventEntities)) {
-      console.log(`Saving ${entities.length} ${name} entities`);
-      
-      // Process in optimized batches
-      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
-        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
-        await this.ctx.store.save(batch);
+      const counts = store.getCounts()
+      if (counts.total > 0) {
+        console.log(`Flushing ${name} store: ${counts.inserts} inserts, ${counts.updates} updates`)
+        await store.flush()
       }
     }
   }
