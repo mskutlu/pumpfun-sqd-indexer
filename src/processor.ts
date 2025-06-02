@@ -42,8 +42,7 @@ interface ProcessingStats {
  * Batch handler passed to Subsquid `run()`.
  */
 export async function handle(ctx: DataHandlerContext<any, Store>) {
-  console.log('==== PROCESSOR STARTING ====');
-  
+
   // Initialize service layer with proper dependencies
   const storeManager = new StoreManager(ctx);
   
@@ -89,14 +88,19 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   };
   
   // Process blocks
-  console.log(`Processing ${ctx.blocks.length} blocks`);
   const blocks = ctx.blocks.map(augmentBlock);
 
   stats.processed.blocks = blocks.length;
 
   // Iterate through blocks and instructions
   for (const block of blocks) {
-    const timestamp = new Date(block.header.timestamp);
+    // Fix timestamp conversion - Solana timestamps need proper conversion
+    // Convert timestamp to milliseconds if it's in seconds
+    const timestamp = new Date(
+      typeof block.header.timestamp === 'number' && block.header.timestamp < 5000000000 
+        ? block.header.timestamp * 1000  // Convert seconds to milliseconds
+        : block.header.timestamp         // Already in milliseconds
+    );
     const slot = block.header.slot;
     for (const instruction of block.instructions) {
       // Skip non-PumpFun instructions

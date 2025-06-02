@@ -130,7 +130,7 @@ export class MemoryStore<T extends { id: string }> {
     // Process all inserts at once
     const inserts = Array.from(this.insertList.values())
     if (inserts.length > 0) {
-      console.log(`Inserting ${inserts.length} ${this.name} entities`)
+      //console.log(`Inserting ${inserts.length} ${this.name} entities`)
       try {
         await this.manager.ctx.store.insert(inserts)
       } catch (err) {
@@ -152,15 +152,15 @@ export class MemoryStore<T extends { id: string }> {
     // Process all updates at once
     const updates = Array.from(this.updateList.values())
     if (updates.length > 0) {
-      console.log(`Updating ${updates.length} ${this.name} entities`)
+      //console.log(`Updating ${updates.length} ${this.name} entities`)
       try {
-        await this.manager.ctx.store.save(updates)
+        await this.manager.ctx.store.upsert(updates)
       } catch (err) {
         console.error(`Error updating ${this.name} entities:`, err)
         // Fall back to individual updates if batch fails
         for (const entity of updates) {
           try {
-            await this.manager.ctx.store.save(entity)
+            await this.manager.ctx.store.upsert(entity)
           } catch (innerErr) {
             console.error(`Error updating ${this.name} entity ${entity.id}:`, innerErr)
           }
