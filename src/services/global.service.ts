@@ -98,7 +98,7 @@ export class GlobalService {
       
       // Create a fallback global config to ensure it exists
       try {
-        const config = await this.setGlobalConfig({
+         await this.setGlobalConfig({
           id: 'global',
           feeRecipient: 'fallback-user',
           feeBasisPoints: 30n,

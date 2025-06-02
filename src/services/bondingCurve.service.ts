@@ -4,15 +4,24 @@ import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 import { TokenService } from "./token.service"
 
+// Types used by processor context queue
+type Task = () => Promise<void>
+type ProcessorContext = { store: StoreWithCache, queue: Task[] }
+
 /**
  * Stores and updates BondingCurve entities.  All reserve deltas are applied
  * in-memory and the final state is persisted at the end of the batch.
  */
 export class BondingCurveService {
+  private processorContext?: { queue: Task[] }
+  
   constructor(
     private readonly store: StoreWithCache,
-    private readonly tokenService?: TokenService
-  ) {}
+    private readonly tokenService?: TokenService,
+    processorContext?: { queue: Task[] }
+  ) {
+    this.processorContext = processorContext
+  }
 
 
   /**
@@ -38,18 +47,152 @@ export class BondingCurveService {
     updatedAt: Date
   }): Promise<BondingCurve> {
     // Use StoreWithCache's defer to optimize database access
-    this.store.defer(BondingCurve, params.id)
+    this.store.defer(BondingCurve, params.id);
     
     try {
-      // Use getOrInsert for optimized entity creation/retrieval
-      return await this.store.getOrInsert(BondingCurve, params.id, () => {
-        return new BondingCurve(params)
-      })
-    } catch (error) {
-      // Fallback to direct insert on failure
-      const curve = new BondingCurve(params)
-      await this.store.insert(curve)
-      return curve
+      // First check if the curve already exists
+      const existing = await this.store.get(BondingCurve, params.id);
+      if (existing) {
+        // Update existing curve with new params
+        existing.virtualSolReserves = params.virtualSolReserves;
+        existing.virtualTokenReserves = params.virtualTokenReserves;
+        existing.realSolReserves = params.realSolReserves;
+        existing.realTokenReserves = params.realTokenReserves;
+        existing.tokenTotalSupply = params.tokenTotalSupply;
+        existing.feeBasisPoints = params.feeBasisPoints;
+        existing.updatedAt = params.updatedAt;
+        
+        // Only update token if provided and existing is missing one
+        if (params.token && (!existing.token || existing.token === null)) {
+          existing.token = params.token;
+        }
+        
+        await this.store.upsert(existing);
+        return existing;
+      }
+      
+      // Determine if we have a valid token reference
+      const tokenRef = params.token;
+      let validToken = false;
+      let tokenId = '';
+      
+      if (tokenRef) {
+        if (typeof tokenRef === 'string') {
+          tokenId = tokenRef;
+          // Only check if token exists if tokenService is available
+          if (this.tokenService) {
+            try {
+              const token = await this.tokenService.getToken(tokenId, true);
+              if (token) {
+                validToken = true;
+                params.token = token;
+              }
+            } catch (tokenError) {
+              //console.log(`Token ${tokenId} not available yet for bonding curve ${params.id}`);
+            }
+          }
+        } else if (tokenRef.id) {
+          tokenId = tokenRef.id;
+          validToken = true;
+        }
+      }
+
+      // If token is valid, create with token reference
+      if (validToken) {
+        return await this.store.getOrInsert(BondingCurve, params.id, () => {
+          return new BondingCurve(params);
+        });
+      } 
+      
+      // If token is not valid but we have a processor context queue, 
+      // create without token and queue an update for later
+      if (this.processorContext?.queue) {
+        // Create curve without token reference to avoid FK constraint issues
+        const safeParams = {...params};
+        const originalTokenRef = safeParams.token; // Save original reference
+        delete safeParams.token; // Remove invalid token reference
+        
+        // Create the curve first
+        const curve = new BondingCurve(safeParams);
+        await this.store.insert(curve);
+        
+        // Queue an update task to set the token reference later
+        //console.log(`Queuing bonding curve ${params.id} token reference update for later`);
+        this.processorContext.queue.push(async () => {
+          try {
+            // Get fresh curve data
+            const savedCurve = await this.store.get(BondingCurve, params.id);
+            if (!savedCurve) return;
+            
+            // Try to get the token again, it might exist now
+            if (this.tokenService && tokenId) {
+              const token = await this.tokenService.getToken(tokenId, true);
+              if (token) {
+                savedCurve.token = token;
+                await this.store.upsert(savedCurve);
+                //console.log(`Successfully updated bonding curve ${params.id} with token ${tokenId}`);
+              }
+            } else if (originalTokenRef && typeof originalTokenRef !== 'string') {
+              // Try using the original reference directly
+              savedCurve.token = originalTokenRef;
+              await this.store.upsert(savedCurve);
+              console.log(`Updated bonding curve ${params.id} with original token reference`);
+            }
+          } catch (queuedError) {
+            console.warn(`Failed to update bonding curve ${params.id} token from queue:`, queuedError);
+          }
+        });
+        
+        return curve;
+      } else {
+        // Without processor queue, create without token reference as best effort
+        console.warn(`Creating bonding curve ${params.id} without token reference - possible FK constraint issues`);
+        const safeParams = {...params};
+        delete safeParams.token; // Remove invalid token reference
+        
+        const curve = new BondingCurve(safeParams);
+        await this.store.insert(curve);
+        return curve;
+      }
+    } catch (error: any) {
+      // Handle transaction abort errors by queuing for later execution
+      if (this.processorContext?.queue && error?.driverError?.code === '25P02') {
+        //console.log(`Queuing bonding curve creation for ${params.id} after transaction abort`);
+        
+        // Create a copy of params to avoid mutation issues
+        const paramsForQueue = {...params};
+        
+        // Add to processor queue for later execution when dependencies might be resolved
+        this.processorContext.queue.push(async () => {
+          try {
+            // Try again with a clean slate
+            const curve = await this.createBondingCurve(paramsForQueue);
+            //console.log(`Successfully created queued bonding curve ${params.id}`);
+            // Don't return the curve (void return type needed for Task)
+          } catch (queuedError) {
+            console.warn(`Still failed to create bonding curve ${params.id} from queue:`, queuedError);
+            
+            // Last resort - create without token reference
+            try {
+              const safeParams = {...paramsForQueue};
+              delete safeParams.token; // Remove potentially problematic token reference
+              
+              const curve = new BondingCurve(safeParams);
+              await this.store.insert(curve);
+              console.log(`Created bonding curve ${params.id} without token reference as last resort`);
+            } catch (finalError) {
+              console.error(`Complete failure creating bonding curve ${params.id}:`, finalError);
+            }
+          }
+        });
+        
+        // Return a non-persisted instance for now
+        return new BondingCurve(params);
+      }
+      
+      // Re-throw the error if we can't queue it
+      console.error(`Failed to create bonding curve ${params.id}:`, error);
+      throw error;
     }
   }
   
@@ -105,12 +248,12 @@ export class BondingCurveService {
     updatedAt: Date
   }): Promise<BondingCurve | undefined> {
     // Use defer to optimize database access
-    this.store.defer(BondingCurve, curveId)
+    this.store.defer(BondingCurve, curveId);
     
     try {
       // Get the curve
-      const curve = await this.store.get(BondingCurve, curveId)
-      if (!curve) return undefined
+      const curve = await this.store.get(BondingCurve, curveId);
+      if (!curve) return undefined;
       
       // Update fields
       if (params.virtualSolReserves !== undefined) curve.virtualSolReserves = params.virtualSolReserves
@@ -119,13 +262,69 @@ export class BondingCurveService {
       if (params.realTokenReserves !== undefined) curve.realTokenReserves = params.realTokenReserves
       if (params.tokenTotalSupply !== undefined) curve.tokenTotalSupply = params.tokenTotalSupply
       if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
-      curve.updatedAt = params.updatedAt
+      curve.updatedAt = params.updatedAt;
       
-      // Use upsert for optimized updates
-      await this.store.upsert(curve)
-      return curve
-    } catch (error) {
-      return undefined
+      // Ensure token relationship is valid to prevent FK constraints errors
+      if (curve.token === null || curve.token === undefined) {
+        // If we have a processor context queue, add a task to try this update later
+        // when the token might exist
+        if (this.processorContext?.queue) {
+          //console.log(`Queuing bonding curve update for ${curveId} - token reference missing`);
+          this.processorContext.queue.push(async () => {
+            // Check if token exists by the time we process the queue
+            if (this.tokenService) {
+              const tokenId = typeof curve.token === 'string' ? curve.token : curveId;
+              const token = await this.tokenService.getToken(tokenId, true);
+              if (token) {
+                // Try update again with the token
+                curve.token = token;
+                try {
+                  await this.store.upsert(curve);
+                  //console.log(`Successfully updated queued bonding curve ${curveId}`);
+                } catch (queuedError) {
+                  console.warn(`Still failed to update bonding curve ${curveId} from queue:`, queuedError);
+                }
+              }
+            }
+          });
+        } else {
+          console.warn(`Skipping update for bonding curve ${curveId} - missing token reference`);
+        }
+        return curve; // Return the in-memory version
+      }
+      
+      // If token relationship is valid, perform the update
+      await this.store.upsert(curve);
+      return curve;
+    } catch (error: any) {
+      // If we have a processor context queue, add this task to try again later
+      if (this.processorContext?.queue && error?.driverError?.code === '25P02') {
+        //console.log(`Queuing bonding curve update for ${curveId} after transaction abort`);
+        this.processorContext.queue.push(async () => {
+          try {
+            // Get fresh curve data
+            const curve = await this.store.get(BondingCurve, curveId);
+            if (curve) {
+              // Update fields
+              if (params.virtualSolReserves !== undefined) curve.virtualSolReserves = params.virtualSolReserves
+              if (params.virtualTokenReserves !== undefined) curve.virtualTokenReserves = params.virtualTokenReserves
+              if (params.realSolReserves !== undefined) curve.realSolReserves = params.realSolReserves
+              if (params.realTokenReserves !== undefined) curve.realTokenReserves = params.realTokenReserves
+              if (params.tokenTotalSupply !== undefined) curve.tokenTotalSupply = params.tokenTotalSupply
+              if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
+              curve.updatedAt = params.updatedAt;
+              
+              await this.store.upsert(curve);
+              //console.log(`Successfully updated queued bonding curve ${curveId}`);
+            }
+          } catch (queuedError) {
+            console.warn(`Still failed to update bonding curve ${curveId} from queue:`, queuedError);
+          }
+        });
+      } else {
+        console.warn(`Failed to update bonding curve ${curveId}:`, error?.message || String(error));
+      }
+      return undefined;
     }
   }
 

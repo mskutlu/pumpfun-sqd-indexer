@@ -55,15 +55,14 @@ export async function handle(ctx: DataHandlerContext<any, StoreWithCache>) {
   const globalService = new GlobalService(processorContext.store);
   
   // TokenService needs CurveService but CurveService also needs TokenService
-  // We'll create them separately and then set dependencies
-  const curveService = new BondingCurveService(processorContext.store);
-  const tokenService = new TokenService(processorContext.store, curveService, globalService);
+  // We'll create them separately and then set dependencies, passing processor context for queue
+  // Pass the entire processorContext to enable queue-based dependency resolution
+  const curveService = new BondingCurveService(processorContext.store, undefined, processorContext);
+  const tokenService = new TokenService(processorContext.store, curveService);
   
-  // Now that we have TokenService, we can set it in CurveService
-  Object.defineProperty(curveService, 'tokenService', {
-    value: tokenService,
-    writable: false
-  });
+  // Now set the token service reference in curve service
+  // This is a circular dependency, but it's safe in this case
+  (curveService as any).tokenService = tokenService;
   
   // Trade service needs both TokenService and CurveService
   const tradeService = new TradeService(processorContext.store, tokenService, curveService)
@@ -192,25 +191,7 @@ export async function handle(ctx: DataHandlerContext<any, StoreWithCache>) {
   for (const task of processorContext.queue) {
     await task();
   }
-  
-  // Log stats
-  // console.log(`--- Processing Statistics ---`);
-  // console.log(`Processed ${stats.processed.blocks} blocks with ${stats.processed.instructions} instructions`);
-  // console.log(`\nInstructions processed:`);
-  // console.log(`- Initialize: ${stats.instructions.initialize}`);
-  // console.log(`- SetParams: ${stats.instructions.setParams}`);
-  // console.log(`- Create: ${stats.instructions.create}`);
-  // console.log(`- Withdraw: ${stats.instructions.withdraw}`);
-  // console.log(`- Trade: ${stats.instructions.trade}`);
-  // console.log(`- Unknown: ${stats.instructions.unknown}`);
-  // console.log(`\nEntity updates:`);
-  // console.log(`- Tokens: ${stats.entities.tokens}`);
-  // console.log(`- BondingCurves: ${stats.entities.bondingCurves}`);
-  // console.log(`- Trades: ${stats.entities.trades}`);
-  // console.log(`- GlobalConfigs: ${stats.entities.globalConfigs}`);
-  // console.log(`- TokenCreated events: ${stats.entities.tokenCreated}`);
-  // console.log(`- TokenCompleted events: ${stats.entities.tokenCompleted}`);
-  // console.log('==== PROCESSOR COMPLETED ====');
+
 }
 
 
