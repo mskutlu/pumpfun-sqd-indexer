@@ -44,8 +44,7 @@ type ProcessorContext = DataHandlerContext<any, StoreWithCache> & { queue: Task[
  * Batch handler passed to Subsquid `run()`.
  */
 export async function handle(ctx: DataHandlerContext<any, StoreWithCache>) {
-  console.log('==== PROCESSOR STARTING ====');
-  
+
   // Set up the processor context with a task queue
   const processorContext: ProcessorContext = {
     ...ctx,
@@ -103,7 +102,13 @@ export async function handle(ctx: DataHandlerContext<any, StoreWithCache>) {
   // We process one block at a time to prevent one block's errors from affecting others
   for (const block of blocks) {
     try {
-      const timestamp = new Date(block.header.timestamp);
+      // Fix timestamp conversion - Solana timestamps need proper conversion
+      // Convert timestamp to milliseconds if it's in seconds
+      const timestamp = new Date(
+          typeof block.header.timestamp === 'number' && block.header.timestamp < 5000000000
+              ? block.header.timestamp * 1000  // Convert seconds to milliseconds
+              : block.header.timestamp         // Already in milliseconds
+      );
       const slot = block.header.slot;
       
       // Group instructions by transaction signature to handle them together
