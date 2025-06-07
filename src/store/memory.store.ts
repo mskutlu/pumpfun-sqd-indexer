@@ -7,46 +7,41 @@ import { Entity } from "@subsquid/typeorm-store/lib/store"
  * to improve database operations and reduce transaction conflicts.
  */
 export class MemoryStore<T extends { id: string }> {
-  // Lists for database operations - updateList also serves as our cache
+  // Lists for database operations - updateList also serves as our cache for existing entities
   private readonly insertList = new Map<string, T>()
   private readonly updateList = new Map<string, T>()
   private manager: StoreManager | null = null
 
   constructor(private readonly name: string) {}
 
-  /**
-   * Set the StoreManager reference to enable direct database operations
-   */
   setManager(manager: StoreManager): void {
     this.manager = manager
   }
 
   /**
-   * Find an entity by ID, first checking in memory and then in database if needed
-   * This is the central find method that all services should use
-   * @param id Entity ID to find
-   * @returns The entity or undefined if not found
+   * Find an entity by ID. This is the ONLY method that should read from the database
+   * and populate the updateList (our cache for existing entities).
    */
   async find(id: string): Promise<T | undefined> {
-    // First check in memory (updateList is our cache)
-    const cachedEntity = this.updateList.get(id)
-    if (cachedEntity) {
-      return cachedEntity
-    }
-    
-    // Also check insert list for new entities not yet persisted
-    const newEntity = this.insertList.get(id)
-    if (newEntity) {
-      return newEntity
+    // 1. Check update list (entities that we know exist in DB)
+    let entity = this.updateList.get(id);
+    if (entity) {
+      return entity;
     }
 
-    // Not in memory, try database lookup
+    // 2. Check insert list (new entities created in this batch)
+    entity = this.insertList.get(id);
+    if (entity) {
+      return entity;
+    }
+
+    // 3. Not in memory, try database lookup
     if (this.manager) {
       try {
-        const entity = await this.manager.ctx.store.get(this.name as any, id)
-        if (entity) {
-          // Add to update list (since it exists in DB)
-          const typedEntity = entity as unknown as T
+        const dbEntity = await this.manager.ctx.store.get(this.name as any, id);
+        if (dbEntity) {
+          // Add to update list (our cache) since it exists in DB
+          const typedEntity = dbEntity as unknown as T
           this.updateList.set(id, typedEntity)
           return typedEntity
         }
@@ -54,62 +49,29 @@ export class MemoryStore<T extends { id: string }> {
         console.error(`Error finding ${this.name} with ID ${id}:`, err)
       }
     }
-
-    // Not found anywhere
     return undefined
   }
 
   /**
-   * Save an entity - automatically determines if it's an insert or update
-   * @param entity Entity to save
+   * Saves an entity to the in-memory store without hitting the database.
+   * This is now extremely fast as it avoids any DB lookups.
    */
   async save(entity: T): Promise<void> {
-    // Check if this entity already exists in our update list (DB entities)
+    // If it was already loaded from the DB, it will be in updateList. Update it there.
     if (this.updateList.has(entity.id)) {
-      // It's an update of an existing entity
       this.updateList.set(entity.id, entity)
       return
     }
-    
-    // If it's in our insert list, update it there
-    if (this.insertList.has(entity.id)) {
-      this.insertList.set(entity.id, entity)
-      return
-    }
-    
-    // Not in our memory lists, check DB if we can
-    if (this.manager) {
-      try {
-        const existsInDb = await this.manager.ctx.store.get(this.name as any, entity.id)
-        if (existsInDb) {
-          // It exists in DB, so it's an update
-          this.updateList.set(entity.id, entity)
-        } else {
-          // Not in DB, so it's an insert
-          this.insertList.set(entity.id, entity)
-        }
-      } catch (err) {
-        // Assume it's new if we can't verify
-        this.insertList.set(entity.id, entity)
-      }
-    } else {
-      // Can't check DB, assume it's new
-      this.insertList.set(entity.id, entity)
-    }
+
+    // Otherwise, it's a new entity created in this batch or an update to one.
+    // We treat it as an "insert" or "upsert". The flush logic will handle it correctly.
+    this.insertList.set(entity.id, entity);
   }
 
-  /**
-   * Get all entities currently in memory
-   */
   getAll(): T[] {
-    // Combine entities from both lists
-    const allEntities = [...Array.from(this.updateList.values()), ...Array.from(this.insertList.values())]
-    return allEntities
+    return [...this.updateList.values(), ...this.insertList.values()]
   }
 
-  /**
-   * Get counts of pending operations
-   */
   getCounts(): { total: number, inserts: number, updates: number } {
     return {
       total: this.updateList.size + this.insertList.size,
@@ -119,71 +81,64 @@ export class MemoryStore<T extends { id: string }> {
   }
 
   /**
-   * Flush entities in this store to the database
-   * This separates inserts and updates to avoid transaction conflicts
+   * Flushes entities to the database. We use `upsert` for inserts as a robust
+   * way to handle entities that might have been created in a previous batch but not cached.
    */
   async flush(): Promise<void> {
     if (!this.manager) {
       throw new Error('Cannot flush store without manager reference')
     }
 
-    // Process all inserts at once
-    const inserts = Array.from(this.insertList.values())
-    if (inserts.length > 0) {
-      //console.log(`Inserting ${inserts.length} ${this.name} entities`)
+    // `insertList` contains all entities created or modified in this batch that weren't
+    // originally loaded from the DB. `upsert` is the safest and often most performant
+    // way to handle them, as it performs an INSERT or UPDATE as needed.
+    const upserts = Array.from(this.insertList.values())
+    if (upserts.length > 0) {
       try {
-        await this.manager.ctx.store.insert(inserts)
+        await this.manager.ctx.store.upsert(upserts)
       } catch (err) {
-        console.error(`Error inserting ${this.name} entities:`, err)
-        // Fall back to individual inserts if batch fails
-        for (const entity of inserts) {
-          try {
-            await this.manager.ctx.store.insert(entity)
-          } catch (innerErr) {
-            console.error(`Error inserting ${this.name} entity ${entity.id}:`, innerErr)
-          }
-        }
-      }
-      
-      // Clear the insert list after processing
-      this.insertList.clear()
-    }
-
-    // Process all updates at once
-    const updates = Array.from(this.updateList.values())
-    if (updates.length > 0) {
-      //console.log(`Updating ${updates.length} ${this.name} entities`)
-      try {
-        await this.manager.ctx.store.upsert(updates)
-      } catch (err) {
-        console.error(`Error updating ${this.name} entities:`, err)
-        // Fall back to individual updates if batch fails
-        for (const entity of updates) {
+        console.error(`Error upserting ${this.name} entities:`, err)
+        // Fallback to individual upserts
+        for (const entity of upserts) {
           try {
             await this.manager.ctx.store.upsert(entity)
           } catch (innerErr) {
-            console.error(`Error updating ${this.name} entity ${entity.id}:`, innerErr)
+            console.error(`Error upserting ${this.name} entity ${entity.id}:`, innerErr)
           }
         }
       }
-      
-      // Clear the update list after processing
+      this.insertList.clear()
+    }
+
+    // `updateList` contains entities that were explicitly loaded from the DB via `find()`.
+    // We can confidently `save` (which means UPDATE) these.
+    const updates = Array.from(this.updateList.values())
+    if (updates.length > 0) {
+      try {
+        await this.manager.ctx.store.save(updates)
+      } catch (err) {
+        console.error(`Error saving updates for ${this.name} entities:`, err)
+        for (const entity of updates) {
+          try {
+            await this.manager.ctx.store.save(entity)
+          } catch (innerErr) {
+            console.error(`Error saving update for ${this.name} entity ${entity.id}:`, innerErr)
+          }
+        }
+      }
       this.updateList.clear()
     }
   }
 }
 
 /**
- * Manages MemoryStore instances and coordinates database operations
+ * Manages MemoryStore instances and coordinates database operations.
  */
 export class StoreManager {
   private readonly stores = new Map<string, MemoryStore<any>>()
 
   constructor(public readonly ctx: DataHandlerContext<any, Store>) {}
 
-  /**
-   * Get or create a memory store for the specified entity type
-   */
   getStore<E extends { id: string }>(name: string): MemoryStore<E> {
     let store = this.stores.get(name)
     if (!store) {
@@ -195,21 +150,23 @@ export class StoreManager {
   }
 
   /**
-   * Get all stores managed by this manager
-   */
-  getAllStores(): Map<string, MemoryStore<any>> {
-    return this.stores
-  }
-
-  /**
-   * Flush all stores to the database in an optimized order
+   * Flush all stores to the database in an order that respects foreign key constraints.
    */
   async save(): Promise<void> {
-    for (const [name, store] of this.stores.entries()) {
-      const counts = store.getCounts()
-      if (counts.total > 0) {
-        console.log(`Flushing ${name} store: ${counts.inserts} inserts, ${counts.updates} updates`)
-        await store.flush()
+    // Define the explicit order for flushing
+    const flushOrder = [
+      'GlobalConfig',
+      'PumpToken',
+      'BondingCurve',
+      'Trade',
+      'TokenCreated',
+      'TokenCompleted'
+    ];
+
+    for (const name of flushOrder) {
+      const store = this.stores.get(name);
+      if (store && store?.getCounts().total > 0) {
+        await store.flush();
       }
     }
   }

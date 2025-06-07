@@ -10,13 +10,13 @@ import { TokenService } from "./token.service"
  */
 export class BondingCurveService {
   private readonly store: MemoryStore<BondingCurve>
-  private readonly storeManager: StoreManager
+  // Index for fast lookups by token ID
+  private readonly curveIdByTokenId = new Map<string, string>()
 
   constructor(
-    storeManager: StoreManager,
+    private readonly storeManager: StoreManager,
     private readonly tokenService?: TokenService
   ) {
-    this.storeManager = storeManager
     this.store = storeManager.getStore<BondingCurve>("BondingCurve")
   }
 
@@ -30,9 +30,12 @@ export class BondingCurveService {
   /**
    * Creates a new bonding curve entity
    */
+  /**
+   * Creates a new bonding curve and adds it to our index.
+   */
   async createBondingCurve(params: {
     id: string
-    token: any
+    token: any // Can be string ID or PumpToken object
     virtualSolReserves: bigint
     virtualTokenReserves: bigint
     realSolReserves: bigint
@@ -47,6 +50,13 @@ export class BondingCurveService {
     
     curve = new BondingCurve(params)
     await this.store.save(curve)
+    
+    // Add to our index for fast lookups
+    const tokenId = typeof params.token === 'string' ? params.token : params.token?.id;
+    if (tokenId) {
+        this.curveIdByTokenId.set(tokenId, curve.id);
+    }
+    
     return curve
   }
   
@@ -59,12 +69,23 @@ export class BondingCurveService {
   }
   
   /**
-   * Gets bonding curve by token ID
+   * Gets bonding curve by token ID using the fast in-memory index.
    */
   async getBondingCurveByToken(tokenId: string): Promise<BondingCurve | undefined> {
-    // Find the bonding curve associated with a specific token
-    const curves = this.store.getAll()
-    return curves.find(curve => curve.token && curve.token.id === tokenId)
+    const curveId = this.curveIdByTokenId.get(tokenId);
+    if (curveId) {
+        return this.store.find(curveId);
+    }
+    
+    // Fallback for items not yet in the cache/index (should be rare)
+    // This part is slow, but the index should prevent it from being called often.
+    const curves = this.store.getAll();
+    const curve = curves.find(c => c.token?.id === tokenId);
+    if (curve) {
+        // Found it the slow way, so let's cache it in our index for next time
+        this.curveIdByTokenId.set(tokenId, curve.id);
+    }
+    return curve;
   }
   
   /**

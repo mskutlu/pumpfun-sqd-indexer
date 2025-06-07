@@ -49,16 +49,11 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   // Create services with circular dependencies resolved
   const globalService = new GlobalService(storeManager);
   
-  // TokenService needs CurveService but CurveService also needs TokenService
-  // We'll create them separately and then set dependencies
-  const curveService = new BondingCurveService(storeManager);
+  const curveService = new BondingCurveService(storeManager); // tokenService not needed in constructor
   const tokenService = new TokenService(storeManager, curveService, globalService);
   
-  // Now that we have TokenService, we can set it in CurveService
-  Object.defineProperty(curveService, 'tokenService', {
-    value: tokenService,
-    writable: false
-  });
+  // Resolve circular dependency
+  Object.defineProperty(curveService, 'tokenService', { value: tokenService, writable: false });
   
   // Trade service needs both TokenService and CurveService
   const tradeService = new TradeService(storeManager, tokenService, curveService)
@@ -161,11 +156,9 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
     }
   }
 
-  // Flush any remaining entities in memory to the database
-  await tokenService.flush();
-  await curveService.flush();
-  await tradeService.flush();
-  await globalService.flush();
+  // At the end of the batch, perform a single, ordered save operation.
+  // This replaces all the individual flush() calls.
+  await storeManager.save();
   
   // Log stats
   // console.log(`--- Processing Statistics ---`);
