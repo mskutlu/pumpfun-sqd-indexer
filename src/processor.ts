@@ -92,14 +92,14 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   };
   
   // Convert blocks once using augmentBlock
-  const blocks = ctx.blocks.map(augmentBlock);
-  stats.processed.blocks = blocks.length;
+  //const blocks = ctx.blocks.map(augmentBlock);
+  //stats.processed.blocks = blocks.length;
 
   // Pre-sanitize common values
   const unknownSignature = 'unknown';
 
   // Iterate through blocks and instructions in a single-pass optimized loop
-  for (const block of blocks) {
+  for (const block of ctx.blocks) {
     // Fix timestamp conversion - Solana timestamps need proper conversion
     // Convert timestamp to milliseconds if it's in seconds
     const timestamp = new Date(
