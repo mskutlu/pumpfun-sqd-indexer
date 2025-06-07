@@ -24,7 +24,8 @@ export class GlobalService {
   }
   
   /**
-   * Creates or updates the global config
+   * Creates or updates the global config with smart caching
+   * Uses a memory-first approach to avoid redundant database lookups
    */
   async setGlobalConfig(params: {
     id: string
@@ -33,22 +34,36 @@ export class GlobalService {
     createdAt: Date
     updatedAt: Date
   }): Promise<GlobalConfig> {
-    // Use the optimized find method which checks both memory and database
-    let config = await this.store.find(params.id)
+    // Use in-memory cache first for fastest lookup
+    const cacheId = params.id;
+    
+    // Try to get from cache first
+    let config = this.store.getFromMemoryCache(cacheId);
     
     if (!config) {
-      // Create new global config if not found
-      config = new GlobalConfig(params)
+      // If not in memory, use the find method which checks memory then database
+      config = await this.store.find(cacheId);
+      
+      if (!config) {
+        // Create new global config if not found anywhere
+        config = new GlobalConfig(params);
+      } else {
+        // Update existing config
+        config.feeRecipient = params.feeRecipient;
+        config.feeBasisPoints = params.feeBasisPoints;
+        config.updatedAt = params.updatedAt;
+      }
     } else {
-      // Update existing config
-      config.feeRecipient = params.feeRecipient
-      config.feeBasisPoints = params.feeBasisPoints
-      config.updatedAt = params.updatedAt
+      // We found it in memory, just update the properties
+      config.feeRecipient = params.feeRecipient;
+      config.feeBasisPoints = params.feeBasisPoints;
+      config.updatedAt = params.updatedAt;
     }
     
     // Save will automatically determine if it's an insert or update
-    await this.store.save(config)
-    return config
+    // and update the memory cache
+    await this.store.save(config);
+    return config;
   }
 
   getAll(): GlobalConfig[] {
@@ -57,12 +72,15 @@ export class GlobalService {
 
   /**
    * Process an initialize instruction
+   * Modified to accept primitives directly to avoid object allocation
    */
   async processInitializeInstruction(
-    context: { instruction: SolInstruction; timestamp: Date; slot: number; txSignature: string },
+    instruction: SolInstruction,
+    timestamp: Date,
+    slot: number,
+    txSignature: string,
     stats: any
   ): Promise<void> {
-    const { instruction, timestamp, txSignature } = context;
     
     try {
       // Decode the instruction
@@ -104,12 +122,15 @@ export class GlobalService {
 
   /**
    * Process a setParams instruction
+   * Modified to accept primitives directly to avoid object allocation
    */
   async processSetParamsInstruction(
-    context: { instruction: SolInstruction; timestamp: Date; slot: number; txSignature: string },
+    instruction: SolInstruction,
+    timestamp: Date,
+    slot: number,
+    txSignature: string,
     stats: any
   ): Promise<void> {
-    const { instruction, timestamp } = context;
     
     try {
       // Decode the instruction

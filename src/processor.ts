@@ -91,72 +91,67 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
     }
   };
   
-  // Process blocks
+  // Convert blocks once using augmentBlock
   const blocks = ctx.blocks.map(augmentBlock);
-
   stats.processed.blocks = blocks.length;
 
-  // Iterate through blocks and instructions
+  // Pre-sanitize common values
+  const unknownSignature = 'unknown';
+
+  // Iterate through blocks and instructions in a single-pass optimized loop
   for (const block of blocks) {
     // Fix timestamp conversion - Solana timestamps need proper conversion
     // Convert timestamp to milliseconds if it's in seconds
     const timestamp = new Date(
       typeof block.header.timestamp === 'number' && block.header.timestamp < 5000000000 
-        ? block.header.timestamp * 1000  // Convert seconds to milliseconds
+      ? block.header.timestamp * 1000  // Convert seconds to milliseconds
         : block.header.timestamp         // Already in milliseconds
     );
     const slot = block.header.slot;
+    
     for (const instruction of block.instructions) {
-      // Skip non-PumpFun instructions
+      // Skip non-PumpFun instructions early
       if (instruction.programId !== PROGRAM_ID) continue;
       stats.processed.instructions++;
 
       try {
-        // ===================================================================
-        // USE THE MAP FOR AN INSTANT LOOKUP
-        // ===================================================================
-        // This replaces the expensive Array.find() with a near-instant Map.get()
+        // Use the pre-computed Map for O(1) lookup
         const layout = instructionLayoutMap.get(instruction.d8);
         if (!layout) {
           stats.instructions.unknown++;
-          console.log(`Unknown instruction layout: ${instruction.d8}`);
+          // console.log(`Unknown instruction layout: ${instruction.d8}`);
           continue;
         }
 
-        const txSignature = instruction.transaction?.signatures?.[0] || 'unknown';
-        const instructionContext = {instruction, timestamp, slot, txSignature};
-      
-        // Process instruction based on type - delegate to appropriate service
+        // Get transaction signature once
+        const txSignature = instruction.transaction?.signatures?.[0] || unknownSignature;
+        
+        // Process instruction based on layout type using a switch for fastest dispatch
         switch (layout.d8) {
           case pumpIns.initialize.d8:
             stats.instructions.initialize++;
-            await globalService.processInitializeInstruction(instructionContext, stats);
-           
+            await globalService.processInitializeInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
           case pumpIns.setParams.d8:
             stats.instructions.setParams++;
-            await globalService.processSetParamsInstruction(instructionContext, stats);
-           
+            await globalService.processSetParamsInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
           case pumpIns.create.d8:
             stats.instructions.create++;
-            await tokenService.processCreateInstruction(instructionContext, stats);
-           
+            await tokenService.processCreateInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
           case pumpIns.withdraw.d8:
             stats.instructions.withdraw++;
-            await curveService.processWithdrawInstruction(instructionContext, stats);
-           
+            await curveService.processWithdrawInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
           case pumpIns.buy.d8:
           case pumpIns.sell.d8:
             stats.instructions.trade++;
-            await tradeService.processTradeInstruction(instructionContext, stats);
-           
+            await tradeService.processTradeInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
           default:

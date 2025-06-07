@@ -68,6 +68,21 @@ export class MemoryStore<T extends { id: string }> {
     this.insertList.set(entity.id, entity);
   }
 
+  /**
+   * Gets an entity directly from memory cache (updateList or insertList) without database lookup
+   * This is faster than find() as it doesn't touch the database.
+   */
+  getFromMemoryCache(id: string): T | undefined {
+    // Check update list first (entities that we know exist in DB)
+    let entity = this.updateList.get(id);
+    if (entity) {
+      return entity;
+    }
+
+    // Check insert list (new entities created in this batch)
+    return this.insertList.get(id);
+  }
+
   getAll(): T[] {
     return [...this.updateList.values(), ...this.insertList.values()]
   }

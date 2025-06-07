@@ -179,37 +179,29 @@ export class TradeService {
    * This handles the tradeEventInstruction which contains all necessary data
    */
   async processTradeInstruction(
-    context: { instruction: SolInstruction; timestamp: Date; slot: number; txSignature: string },
+    instruction: SolInstruction,
+    timestamp: Date,
+    slot: number,
+    txSignature: string,
     stats: any
   ): Promise<void> {
-    const { instruction, timestamp, slot, txSignature } = context;
     
     try {
-
       // Early return if we can't identify the transaction
       if(txSignature === 'unknown') return;
       
-      // Instead of filter + loop, use a single loop with early break for the first match
-      let tradeEvent;
-      for(const i of instruction.inner) {
-        if (i.programId.toLowerCase() === indexes.PROGRAM_ID.toLowerCase() &&
-            i.accounts[0].toLowerCase() === indexes.EVENT_AUTHORITY.toLowerCase() && 
-            i.d8 === pumpIns.tradeEventInstruction.d8) {
-          tradeEvent = i;
-          break; // Found it, stop searching!
-        }
-      }
-      
-      // Return if no matching inner instruction found
-      if(!tradeEvent) return;
-      
-      // Try to decode the trade event instruction
-      let decodedInnerInstruction;
-      try {
-        decodedInnerInstruction = pumpIns.tradeEventInstruction.decode(tradeEvent);
-      } catch (error) {
-        // If decoding fails, return
+      const inner = instruction.inner.filter(f=> f.programId.toLowerCase() === indexes.PROGRAM_ID.toLowerCase()
+      && f.accounts[0].toLowerCase() === indexes.EVENT_AUTHORITY.toLowerCase() && f.d8 === pumpIns.tradeEventInstruction.d8 );
+      if(inner.length === 0)
         return;
+      let decodedInnerInstruction;
+      for(const i of inner) {
+      try {
+          decodedInnerInstruction = pumpIns.tradeEventInstruction.decode(i);
+      } catch (error) {
+        // ignore, try next instruction
+        // sometimes it can contains other instructions with same d8 and it cant be decodedInnerInstruction.
+        }
       }
       if (!decodedInnerInstruction || !decodedInnerInstruction.data) {
         console.error('Failed to decode trade event instruction', txSignature);

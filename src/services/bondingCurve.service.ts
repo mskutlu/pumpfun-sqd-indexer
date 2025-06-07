@@ -122,12 +122,15 @@ export class BondingCurveService {
   
   /**
    * Process a withdraw instruction directly from instruction data
+   * Modified to accept primitives directly to avoid object allocation
    */
   async processWithdrawInstruction(
-    context: { instruction: SolInstruction; timestamp: Date; slot: number; txSignature: string },
+    instruction: SolInstruction,
+    timestamp: Date,
+    slot: number,
+    txSignature: string,
     stats: any
   ): Promise<void> {
-    const { instruction, timestamp, slot, txSignature } = context;
     
     try {
       // Decode the instruction
@@ -138,33 +141,39 @@ export class BondingCurveService {
       const bondingCurveId = accounts?.bondingCurve ? accounts.bondingCurve.toString() : `placeholder-${txSignature}`;
       const userId = accounts?.user ? accounts.user.toString() : 'unknown-user';
       
-      // Get the bonding curve
-      let curve = await this.getBondingCurve(bondingCurveId);
-    
-      // If curve not found, create a placeholder
-      if (!curve) {
-        curve = new BondingCurve({
-          id: bondingCurveId,
-          token: null as any, // Placeholder for token relationship
-          virtualSolReserves: 0n,
-          virtualTokenReserves: 0n,
-          realSolReserves: 0n,
-          realTokenReserves: 0n,
-          tokenTotalSupply: 0n,
-          feeBasisPoints: 0n,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        });
-        await this.store.save(curve);
-        stats.entities.bondingCurves++;
-      }  
+      // Use memory-first approach - try to get from memory cache directly first
+      let curve = this.store.getFromMemoryCache(bondingCurveId);
       
-      // Update the bonding curve to reflect withdrawal (typically zeroing out reserves)
-      await this.updateBondingCurve(curve.id, {
-        realSolReserves: 0n,
-        realTokenReserves: 0n,
-        updatedAt: timestamp
-      });
+      // If not in memory, try to find in the database
+      if (!curve) {
+        curve = await this.getBondingCurve(bondingCurveId);
+        
+        // If curve not found anywhere, create a placeholder
+        if (!curve) {
+          curve = new BondingCurve({
+            id: bondingCurveId,
+            token: null as any, // Placeholder for token relationship
+            virtualSolReserves: 0n,
+            virtualTokenReserves: 0n,
+            realSolReserves: 0n,
+            realTokenReserves: 0n,
+            tokenTotalSupply: 0n,
+            feeBasisPoints: 0n,
+            createdAt: timestamp,
+            updatedAt: timestamp
+          });
+          await this.store.save(curve);
+          stats.entities.bondingCurves++;
+        }
+      }
+      
+      // Update curve properties directly - no need for another lookup
+      curve.realSolReserves = 0n;
+      curve.realTokenReserves = 0n;
+      curve.updatedAt = timestamp;
+      
+      // Save the updated curve
+      await this.store.save(curve);
       stats.entities.bondingCurves++;
       
       // Extract token ID from the curve

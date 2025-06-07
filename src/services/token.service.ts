@@ -199,10 +199,12 @@ export class TokenService {
    * Process a create instruction directly from instruction data
    */
   async processCreateInstruction(
-    context: { instruction: SolInstruction; timestamp: Date; slot: number; txSignature: string },
+    instruction: SolInstruction,
+    timestamp: Date,
+    slot: number,
+    txSignature: string,
     stats: any
   ): Promise<void> {
-    const { instruction, timestamp, slot, txSignature } = context;
     
     try {
       const inner = instruction.inner.filter(f=> f.programId.toLowerCase() === indexes.PROGRAM_ID.toLowerCase()
@@ -223,13 +225,21 @@ export class TokenService {
         tokenTotalSupply: 1000000000n
       };
       
+      // Sanitize all string inputs once at the beginning to avoid redundant sanitization
+      const sanitizedMint = sanitizeString(mint);
+      const sanitizedName = sanitizeString(name);
+      const sanitizedSymbol = sanitizeString(symbol);
+      const sanitizedUser = sanitizeString(user);
+      const sanitizedUri = sanitizeString(uri);
+      const sanitizedBondingCurve = sanitizeString(bondingCurve);
+
       // Create the token
-      await this.createToken({
-        id: sanitizeString(mint),
-        name: sanitizeString(name), 
-        symbol: sanitizeString(symbol),
+      const token = await this.createToken({
+        id: sanitizedMint,
+        name: sanitizedName, 
+        symbol: sanitizedSymbol,
         decimals: 6, 
-        creator: sanitizeString(user),
+        creator: sanitizedUser,
         status: 'active',
         createdAt: timestamp,
         updatedAt: timestamp
@@ -238,8 +248,8 @@ export class TokenService {
       
       // Create the bonding curve
       await this.curveService.createBondingCurve({
-        id: sanitizeString(bondingCurve),
-        token: sanitizeString(mint),
+        id: sanitizedBondingCurve,
+        token: sanitizedMint,
         virtualSolReserves: curveParams.initialVirtualSolReserves,
         virtualTokenReserves: curveParams.initialVirtualTokenReserves,
         realSolReserves: 0n,
@@ -251,14 +261,12 @@ export class TokenService {
       });
       stats.entities.bondingCurves++;
       
-      // Create token created event using the token entity we just created
-      const tokenObject = await this.getToken(sanitizeString(mint));
-      if (tokenObject) {
+      if (token) {
         await this.createTokenCreatedEvent({
           id: `${txSignature}-${slot}`,
-          token: tokenObject,
-          user: sanitizeString(user),
-          uri: sanitizeString(uri),
+          token, 
+          user: sanitizedUser,
+          uri: sanitizedUri,
           slot,
           timestamp
         });
