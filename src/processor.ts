@@ -13,6 +13,15 @@ import { TradeService } from "./services/trade.service"
 import * as pumpIns from "./abi/pump-fun/instructions"
 import { PROGRAM_ID } from "./abi/pump-fun"
 
+// ===================================================================
+// PRE-COMPUTE THE LAYOUT MAP (OUTSIDE the handle function)
+// ===================================================================
+// This creates a Map for O(1) lookups: 'd8_string' -> layout_object
+const instructionLayoutMap = new Map(
+  Object.values(pumpIns).map(layout => [layout.d8, layout])
+);
+// ===================================================================
+
 // Statistics tracking interface
 interface ProcessingStats {
   processed: {
@@ -103,8 +112,11 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
       stats.processed.instructions++;
 
       try {
-        // Identify which instruction layout we have
-        const layout = Object.values(pumpIns).find(i => i.d8 === instruction.d8);
+        // ===================================================================
+        // USE THE MAP FOR AN INSTANT LOOKUP
+        // ===================================================================
+        // This replaces the expensive Array.find() with a near-instant Map.get()
+        const layout = instructionLayoutMap.get(instruction.d8);
         if (!layout) {
           stats.instructions.unknown++;
           console.log(`Unknown instruction layout: ${instruction.d8}`);
