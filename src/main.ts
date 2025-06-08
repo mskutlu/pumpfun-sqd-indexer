@@ -44,8 +44,6 @@ const dataSource = new DataSourceBuilder()
                 initialize.d8,
                 setParams.d8,
                 create.d8,
-                buy.d8,
-                sell.d8,
                 withdraw.d8
             ],            
             isCommitted: true
