@@ -10,13 +10,13 @@ import { TokenService } from "./token.service"
  */
 export class BondingCurveService {
   private readonly store: MemoryStore<BondingCurve>
-  // Index for fast lookups by token ID
-  private readonly curveIdByTokenId = new Map<string, string>()
+  private readonly storeManager: StoreManager
 
   constructor(
-    private readonly storeManager: StoreManager,
+    storeManager: StoreManager,
     private readonly tokenService?: TokenService
   ) {
+    this.storeManager = storeManager
     this.store = storeManager.getStore<BondingCurve>("BondingCurve")
   }
 
@@ -50,13 +50,6 @@ export class BondingCurveService {
     
     curve = new BondingCurve(params)
     await this.store.save(curve)
-    
-    // Add to our index for fast lookups
-    const tokenId = typeof params.token === 'string' ? params.token : params.token?.id;
-    if (tokenId) {
-        this.curveIdByTokenId.set(tokenId, curve.id);
-    }
-    
     return curve
   }
   
@@ -72,20 +65,12 @@ export class BondingCurveService {
    * Gets bonding curve by token ID using the fast in-memory index.
    */
   async getBondingCurveByToken(tokenId: string): Promise<BondingCurve | undefined> {
-    const curveId = this.curveIdByTokenId.get(tokenId);
-    if (curveId) {
-        return this.store.find(curveId);
-    }
+    // Find the bonding curve associated with a specific token
+    const curves = this.store.getAll()
+    const curve = curves.find(curve => curve.token && curve.token.id === tokenId);
+    if (curve) return curve
     
-    // Fallback for items not yet in the cache/index (should be rare)
-    // This part is slow, but the index should prevent it from being called often.
-    const curves = this.store.getAll();
-    const curve = curves.find(c => c.token?.id === tokenId);
-    if (curve) {
-        // Found it the slow way, so let's cache it in our index for next time
-        this.curveIdByTokenId.set(tokenId, curve.id);
-    }
-    return curve;
+    return await this.storeManager.ctx.store.findBy(BondingCurve, { token: { id: tokenId } }).then(curves => curves[0])
   }
   
   /**
@@ -167,13 +152,12 @@ export class BondingCurveService {
         }
       }
       
-      // Update curve properties directly - no need for another lookup
-      curve.realSolReserves = 0n;
-      curve.realTokenReserves = 0n;
-      curve.updatedAt = timestamp;
-      
-      // Save the updated curve
-      await this.store.save(curve);
+      // Update the bonding curve to reflect withdrawal (typically zeroing out reserves)
+      await this.updateBondingCurve(curve.id, {
+        realSolReserves: 0n,
+        realTokenReserves: 0n,
+        updatedAt: timestamp
+      });
       stats.entities.bondingCurves++;
       
       // Extract token ID from the curve

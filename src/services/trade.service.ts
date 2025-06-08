@@ -259,18 +259,9 @@ export class TradeService {
 
       // Update the bonding curve if available
       if (this.curveService) {
-        // Get the mint address from the event
-        const mintAddress = mint.toString();
-        
+
         // Try to find bonding curve by token ID first
         let bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
-        
-        // If not found, try to find by mint address directly - the mint address could be the token ID
-        // This is a fallback since the token ID might be different from mint address in some cases
-        if (!bondingCurve && token.id !== mintAddress) {
-          bondingCurve = await this.curveService.getBondingCurveByToken(mintAddress);
-        }
-
         if (bondingCurve) {
           // Use the existing real reserves as our starting point
           realSolReserves = bondingCurve.realSolReserves;

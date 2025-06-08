@@ -44,13 +44,14 @@ const dataSource = new DataSourceBuilder()
                 initialize.d8,
                 setParams.d8,
                 create.d8,
-                withdraw.d8
+                withdraw.d8,
+                tradeEventInstruction.d8
             ],            
             isCommitted: true
         },
         include: {
-            innerInstructions: true, 
-            transaction: true, 
+            innerInstructions: false,
+            transaction: true,
             transactionTokenBalances: false
         }
     }).build()
