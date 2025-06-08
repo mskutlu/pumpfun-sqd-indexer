@@ -148,8 +148,7 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
             await curveService.processWithdrawInstruction(instruction, timestamp, slot, txSignature, stats);
             break;
 
-          case pumpIns.buy.d8:
-          case pumpIns.sell.d8:
+          case pumpIns.tradeEventInstruction.d8:
             stats.instructions.trade++;
             await tradeService.processTradeInstruction(instruction, timestamp, slot, txSignature, stats);
             break;

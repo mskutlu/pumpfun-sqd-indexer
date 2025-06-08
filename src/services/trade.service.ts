@@ -177,6 +177,7 @@ export class TradeService {
   /**
    * Process a trade instruction directly from instruction data
    * This handles the tradeEventInstruction which contains all necessary data
+   * The instruction is already filtered and validated by the processor
    */
   async processTradeInstruction(
     instruction: SolInstruction,
@@ -190,41 +191,26 @@ export class TradeService {
       // Early return if we can't identify the transaction
       if(txSignature === 'unknown') return;
       
-      const inner = instruction.inner.filter(f=> f.programId.toLowerCase() === indexes.PROGRAM_ID.toLowerCase()
-      && f.accounts[0].toLowerCase() === indexes.EVENT_AUTHORITY.toLowerCase() && f.d8 === pumpIns.tradeEventInstruction.d8 );
-      if(inner.length === 0)
-        return;
-      let decodedInnerInstruction;
-      for(const i of inner) {
+      // Since the processor has already filtered for tradeEventInstruction.d8,
+      // we just need to decode it directly
+      let decodedInstruction;
       try {
-          decodedInnerInstruction = pumpIns.tradeEventInstruction.decode(i);
+        decodedInstruction = pumpIns.tradeEventInstruction.decode(instruction);
       } catch (error) {
-        // ignore, try next instruction
-        // sometimes it can contains other instructions with same d8 and it cant be decodedInnerInstruction.
-        }
-      }
-      if (!decodedInnerInstruction || !decodedInnerInstruction.data) {
-        console.error('Failed to decode trade event instruction', txSignature);
+        //console.error('Failed to decode trade event instruction', txSignature, error);
         return;
       }
       
+      if (!decodedInstruction || !decodedInstruction.data) {
+        console.error('Missing data in trade event instruction', txSignature);
+        return;
+      }
+      
+      // Extract all the data we need from the trade event instruction
       const {
         mint, solAmount, tokenAmount, isBuy, user, 
         virtualSolReserves, virtualTokenReserves
-      } = decodedInnerInstruction.data;
-
-      // Decode the main instruction based on whether it's a buy or sell
-      let decodedInstruction;
-      if (isBuy) {
-        decodedInstruction = pumpIns.buy.decode(instruction);
-      }
-      else {
-        decodedInstruction = pumpIns.sell.decode(instruction);
-      }
-      
-      // Get the accounts from the decoded instruction
-      const { accounts } = decodedInstruction;
-      const { bondingCurve: bondingCurveAccount } = accounts;
+      } = decodedInstruction.data;
 
       // Calculate estimated real reserves based on virtual reserves and trade type
       // Initial values - we'll try to get actual values from the bonding curve later
@@ -273,13 +259,16 @@ export class TradeService {
 
       // Update the bonding curve if available
       if (this.curveService) {
-        // First try to get by direct account reference from the decoded instruction
-        let bondingCurve = bondingCurveAccount ?
-          await this.curveService.getBondingCurve(bondingCurveAccount.toString()) : undefined;
-
-        // If not found by account, try to find by token ID as fallback
-        if (!bondingCurve && token) {
-          bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+        // Get the mint address from the event
+        const mintAddress = mint.toString();
+        
+        // Try to find bonding curve by token ID first
+        let bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
+        
+        // If not found, try to find by mint address directly - the mint address could be the token ID
+        // This is a fallback since the token ID might be different from mint address in some cases
+        if (!bondingCurve && token.id !== mintAddress) {
+          bondingCurve = await this.curveService.getBondingCurveByToken(mintAddress);
         }
 
         if (bondingCurve) {
