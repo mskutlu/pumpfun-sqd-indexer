@@ -92,14 +92,14 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   };
   
   // Convert blocks once using augmentBlock
-  //const blocks = ctx.blocks.map(augmentBlock);
+  const blocks = ctx.blocks.map(augmentBlock);
   //stats.processed.blocks = blocks.length;
 
   // Pre-sanitize common values
   const unknownSignature = 'unknown';
 
   // Iterate through blocks and instructions in a single-pass optimized loop
-  for (const block of ctx.blocks) {
+  for (const block of blocks) {
     // Fix timestamp conversion - Solana timestamps need proper conversion
     // Convert timestamp to milliseconds if it's in seconds
     const timestamp = new Date(
@@ -168,23 +168,23 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   await storeManager.save();
   
   // Log stats
-  // console.log(`--- Processing Statistics ---`);
-  // console.log(`Processed ${stats.processed.blocks} blocks with ${stats.processed.instructions} instructions`);
-  // console.log(`\nInstructions processed:`);
-  // console.log(`- Initialize: ${stats.instructions.initialize}`);
-  // console.log(`- SetParams: ${stats.instructions.setParams}`);
-  // console.log(`- Create: ${stats.instructions.create}`);
-  // console.log(`- Withdraw: ${stats.instructions.withdraw}`);
-  // console.log(`- Trade: ${stats.instructions.trade}`);
-  // console.log(`- Unknown: ${stats.instructions.unknown}`);
-  // console.log(`\nEntity updates:`);
-  // console.log(`- Tokens: ${stats.entities.tokens}`);
-  // console.log(`- BondingCurves: ${stats.entities.bondingCurves}`);
-  // console.log(`- Trades: ${stats.entities.trades}`);
-  // console.log(`- GlobalConfigs: ${stats.entities.globalConfigs}`);
-  // console.log(`- TokenCreated events: ${stats.entities.tokenCreated}`);
-  // console.log(`- TokenCompleted events: ${stats.entities.tokenCompleted}`);
-  // console.log('==== PROCESSOR COMPLETED ====');
+//   console.log(`--- Processing Statistics ---`);
+//   console.log(`Processed ${stats.processed.blocks} blocks with ${stats.processed.instructions} instructions`);
+//   console.log(`\nInstructions processed:`);
+//   console.log(`- Initialize: ${stats.instructions.initialize}`);
+//   console.log(`- SetParams: ${stats.instructions.setParams}`);
+//   console.log(`- Create: ${stats.instructions.create}`);
+//   console.log(`- Withdraw: ${stats.instructions.withdraw}`);
+//   console.log(`- Trade: ${stats.instructions.trade}`);
+//   console.log(`- Unknown: ${stats.instructions.unknown}`);
+//   console.log(`\nEntity updates:`);
+//   console.log(`- Tokens: ${stats.entities.tokens}`);
+//   console.log(`- BondingCurves: ${stats.entities.bondingCurves}`);
+//   console.log(`- Trades: ${stats.entities.trades}`);
+//   console.log(`- GlobalConfigs: ${stats.entities.globalConfigs}`);
+//   console.log(`- TokenCreated events: ${stats.entities.tokenCreated}`);
+//   console.log(`- TokenCompleted events: ${stats.entities.tokenCompleted}`);
+//   console.log('==== PROCESSOR COMPLETED ====');
 }
 
 

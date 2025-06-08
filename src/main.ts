@@ -39,22 +39,21 @@ const dataSource = new DataSourceBuilder()
     })
     .addInstruction({
         where: {
-            programId: [PROGRAM_ID.toString(), EVENT_AUTHORITY.toString()], 
+            programId: [PROGRAM_ID.toString()],
             d8: [
                 initialize.d8,
                 setParams.d8,
                 create.d8,
                 buy.d8,
                 sell.d8,
-                withdraw.d8,
-                tradeEventInstruction.d8
+                withdraw.d8
             ],            
             isCommitted: true
         },
         include: {
             innerInstructions: true, 
             transaction: true, 
-            transactionTokenBalances: true 
+            transactionTokenBalances: false
         }
     }).build()
 
