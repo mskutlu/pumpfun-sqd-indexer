@@ -1,8 +1,8 @@
-import { BondingCurve } from "../model"
-import { MemoryStore, StoreManager } from "../store/memory.store"
-import { Instruction as SolInstruction } from "@subsquid/solana-objects"
+import {BondingCurve} from "../model"
+import {MemoryStore, StoreManager} from "../store/memory.store"
+import {Instruction as SolInstruction} from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
-import { TokenService } from "./token.service"
+import {TokenService} from "./token.service"
 
 /**
  * Stores and updates BondingCurve entities.  All reserve deltas are applied
@@ -55,22 +55,20 @@ export class BondingCurveService {
    */
   async getBondingCurve(id: string): Promise<BondingCurve | undefined> {
     // First check in memory
-    let curve = await this.store.find(id);
+    // // If not in memory, try to find in database
+    // if (!curve) {
+    //   try {
+    //     curve = await this.storeManager.ctx.store.get(BondingCurve, id);
+    //     if (curve) {
+    //       // Add to memory store for future access
+    //       await this.store.save(curve);
+    //     }
+    //   } catch (err) {
+    //     console.error(`Error loading bonding curve ${id} from database:`, err);
+    //   }
+    // }
     
-    // If not in memory, try to find in database
-    if (!curve) {
-      try {
-        curve = await this.storeManager.ctx.store.get(BondingCurve, id);
-        if (curve) {
-          // Add to memory store for future access
-          await this.store.save(curve);
-        }
-      } catch (err) {
-        console.error(`Error loading bonding curve ${id} from database:`, err);
-      }
-    }
-    
-    return curve;
+    return await this.store.find(id);
   }
 
   
@@ -140,18 +138,19 @@ export class BondingCurveService {
           createdAt: timestamp,
           updatedAt: timestamp
         });
-        await this.store.save(curve);
+        await this.store.saveForBatchLoading(curve);
         stats.entities.bondingCurves++;
-      }  
-      
-      // Update the bonding curve to reflect withdrawal (typically zeroing out reserves)
-      await this.updateBondingCurve(curve.id, {
-        realSolReserves: 0n,
-        realTokenReserves: 0n,
-        updatedAt: timestamp
-      });
-      stats.entities.bondingCurves++;
-      
+      }
+      else {
+        // Update the bonding curve to reflect withdrawal (typically zeroing out reserves)
+        await this.updateBondingCurve(curve.id, {
+          realSolReserves: 0n,
+          realTokenReserves: 0n,
+          updatedAt: timestamp
+        });
+        stats.entities.bondingCurves++;
+      }
+
       // Extract token ID from the curve
       const tokenId = curve.token ? 
         (typeof curve.token === 'string' ? curve.token : curve.token.toString()) : 
@@ -198,4 +197,8 @@ export class BondingCurveService {
       // Don't rethrow the error to prevent the processor from stopping
     }
   }
+
+  public async saveForBatchLoading(curve: BondingCurve): Promise<void> {
+    await this.store.saveForBatchLoading(curve);
+  };
 }

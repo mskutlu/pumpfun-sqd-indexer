@@ -58,6 +58,8 @@ const dataSource = new DataSourceBuilder()
     }).build()
 
 // Define the database
-const database = new TypeormDatabase({})
+const database = new TypeormDatabase({
+    isolationLevel: 'READ COMMITTED'
+})
 run(dataSource, database, handle)
 

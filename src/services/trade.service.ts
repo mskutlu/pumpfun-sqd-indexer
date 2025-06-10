@@ -1,4 +1,4 @@
-import { Trade, PumpToken } from "../model"
+import {Trade, PumpToken, BondingCurve} from "../model"
 import { MemoryStore, StoreManager } from "../store/memory.store"
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
@@ -278,6 +278,31 @@ export class TradeService {
             updatedAt: timestamp
           });
           stats.entities.bondingCurves++;
+        }
+        else {
+          // Update real reserves based on trade activity according to AMM logic
+          if (isBuy) {
+            // When buying: SOL goes in, tokens come out
+            realSolReserves =  solAmount;
+            realTokenReserves = -tokenAmount;
+          } else {
+            // When selling: tokens go in, SOL comes out
+            realSolReserves = -solAmount;
+            realTokenReserves =  tokenAmount;
+          }
+          const curve = new BondingCurve({
+            id: bondingCurveAccount,
+            token: null as any, // Placeholder for token relationship
+            virtualSolReserves: virtualSolReserves,
+            virtualTokenReserves: virtualTokenReserves,
+            realSolReserves: realSolReserves,
+            realTokenReserves: realTokenReserves,
+            tokenTotalSupply: 1000000000n,
+            feeBasisPoints: 30n,
+            createdAt: timestamp,
+            updatedAt: timestamp
+          });
+          await this.curveService.saveForBatchLoading(curve);
         }
       }
       
