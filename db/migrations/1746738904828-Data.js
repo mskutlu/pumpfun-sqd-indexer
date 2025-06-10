@@ -18,7 +18,7 @@ module.exports = class Data1746738904828 {
         await db.query(`ALTER TABLE "bonding_curve" ADD CONSTRAINT "FK_01f88325b5bdbe310bdae0f25d0" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
         await db.query(`ALTER TABLE "pump_token" ADD CONSTRAINT "FK_826c7b5eb74ba7c53e25e5f8f61" FOREIGN KEY ("bonding_curve_id") REFERENCES "bonding_curve"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
         await db.query(`ALTER TABLE "token_created" ADD CONSTRAINT "FK_66966e206f5127105764cd3240c" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
-        await db.query(`ALTER TABLE "trade" ADD CONSTRAINT "FK_1690d3192769d2b5dab9ba385fc" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
+        //await db.query(`ALTER TABLE "trade" ADD CONSTRAINT "FK_1690d3192769d2b5dab9ba385fc" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
         await db.query(`ALTER TABLE "token_completed" ADD CONSTRAINT "FK_5db49978b80fc779f35063867eb" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
         await db.query(`ALTER TABLE "params_updated" ADD CONSTRAINT "FK_eb1ff8bacab59c47f7d9ce0e810" FOREIGN KEY ("token_id") REFERENCES "pump_token"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`)
     }
@@ -40,7 +40,7 @@ module.exports = class Data1746738904828 {
         await db.query(`ALTER TABLE "bonding_curve" DROP CONSTRAINT "FK_01f88325b5bdbe310bdae0f25d0"`)
         await db.query(`ALTER TABLE "pump_token" DROP CONSTRAINT "FK_826c7b5eb74ba7c53e25e5f8f61"`)
         await db.query(`ALTER TABLE "token_created" DROP CONSTRAINT "FK_66966e206f5127105764cd3240c"`)
-        await db.query(`ALTER TABLE "trade" DROP CONSTRAINT "FK_1690d3192769d2b5dab9ba385fc"`)
+        //await db.query(`ALTER TABLE "trade" DROP CONSTRAINT "FK_1690d3192769d2b5dab9ba385fc"`)
         await db.query(`ALTER TABLE "token_completed" DROP CONSTRAINT "FK_5db49978b80fc779f35063867eb"`)
         await db.query(`ALTER TABLE "params_updated" DROP CONSTRAINT "FK_eb1ff8bacab59c47f7d9ce0e810"`)
     }

@@ -17,9 +17,9 @@ const dataSource = new DataSourceBuilder()
     .setRpc(process.env.SOLANA_NODE == null ? undefined : {
         client: new SolanaRpcClient({
             url: process.env.SOLANA_NODE,
-            rateLimit: 1 // requests per sec
+            rateLimit: 2 // requests per sec
         }),
-        strideConcurrency: 1
+        strideConcurrency: 4
     })
     // Set start position to the earliest available block in the dataset
     .setBlockRange({ from: 299804550 })
@@ -39,37 +39,25 @@ const dataSource = new DataSourceBuilder()
     })
     .addInstruction({
         where: {
-            programId: [PROGRAM_ID.toString(), EVENT_AUTHORITY.toString()], 
+            programId: [PROGRAM_ID.toString()],
             d8: [
                 initialize.d8,
                 setParams.d8,
                 create.d8,
                 buy.d8,
                 sell.d8,
-                withdraw.d8,
-                tradeEventInstruction.d8
+                withdraw.d8
             ],            
             isCommitted: true
         },
         include: {
-            innerInstructions: true, 
-            transaction: true, 
-            transactionTokenBalances: true 
+            innerInstructions: true,
+            transaction: false,
+            transactionTokenBalances: false
         }
     }).build()
 
-// Define the database with optimized configuration
-const database = new TypeormDatabase({
-  stateSchema: 'squid_processor',
-  // Increase the isolation level to READ COMMITTED for better throughput
-  isolationLevel: 'READ COMMITTED'
-})
-
-// Set environment variables to improve batch processing performance
-process.env.BATCH_SIZE = '3000'           // Process more blocks per batch
-process.env.BLOCK_CONCURRENCY = '5'       // Process blocks concurrently
-process.env.TYPEORM_BATCH_SIZE = '2000'   // TypeORM bulk insert batch size
-
-// Run the processor
+// Define the database
+const database = new TypeormDatabase({})
 run(dataSource, database, handle)
 

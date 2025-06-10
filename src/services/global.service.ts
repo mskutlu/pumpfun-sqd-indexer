@@ -58,7 +58,7 @@ export class GlobalService {
       config.feeRecipient = params.feeRecipient
       config.feeBasisPoints = params.feeBasisPoints
       config.updatedAt = params.updatedAt
-      await this.store.update(config)
+      await this.store.save(config)
     }
     
     return config

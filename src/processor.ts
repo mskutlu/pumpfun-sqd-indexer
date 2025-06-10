@@ -13,6 +13,24 @@ import { TradeService } from "./services/trade.service"
 import * as pumpIns from "./abi/pump-fun/instructions"
 import { PROGRAM_ID } from "./abi/pump-fun"
 
+const instructionLayoutMap = new Map(
+  Object.values(pumpIns).map(layout => [layout.d8, layout])
+);
+
+// Performance tracking
+const performance = {
+  totalTime: 0,
+  blockProcessingTime: 0,
+  instructionProcessingTime: 0,
+  databaseSaveTime: 0,
+  count: 0,
+  startTime: Date.now(),
+  logInterval: 10000 // Log every 10 seconds
+};
+
+// Last time we logged performance metrics
+let lastLogTime = Date.now();
+
 // Statistics tracking interface
 interface ProcessingStats {
   processed: {
@@ -26,6 +44,7 @@ interface ProcessingStats {
     withdraw: number;
     trade: number;
     unknown: number;
+    unknownlayout:  number;
   };
   entities: {
     tokens: number;
@@ -42,8 +61,9 @@ interface ProcessingStats {
  * Batch handler passed to Subsquid `run()`.
  */
 export async function handle(ctx: DataHandlerContext<any, Store>) {
-  console.log('==== PROCESSOR STARTING ====');
-  
+  const blockStartTime = Date.now();
+  performance.count++;
+
   // Initialize service layer with proper dependencies
   const storeManager = new StoreManager(ctx);
   
@@ -76,7 +96,8 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
       create: 0,
       withdraw: 0,
       trade: 0,
-      unknown: 0
+      unknown: 0,
+      unknownlayout: 0
     },
     entities: {
       tokens: 0,
@@ -87,16 +108,21 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
       tokenCompleted: 0
     }
   };
-  
-  // Process blocks
-  console.log(`Processing ${ctx.blocks.length} blocks`);
+
+  // Convert blocks once using augmentBlock
   const blocks = ctx.blocks.map(augmentBlock);
 
   stats.processed.blocks = blocks.length;
 
   // Iterate through blocks and instructions
   for (const block of blocks) {
-    const timestamp = new Date(block.header.timestamp);
+    // Fix timestamp conversion - Solana timestamps need proper conversion
+    // Convert timestamp to milliseconds if it's in seconds
+    const timestamp = new Date(
+      typeof block.header.timestamp === 'number' && block.header.timestamp < 5000000000
+      ? block.header.timestamp * 1000  // Convert seconds to milliseconds
+        : block.header.timestamp         // Already in milliseconds
+    );
     const slot = block.header.slot;
     for (const instruction of block.instructions) {
       // Skip non-PumpFun instructions
@@ -107,12 +133,12 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
         // Identify which instruction layout we have
         const layout = Object.values(pumpIns).find(i => i.d8 === instruction.d8);
         if (!layout) {
-          stats.instructions.unknown++;
+          stats.instructions.unknownlayout++;
           console.log(`Unknown instruction layout: ${instruction.d8}`);
           continue;
         }
 
-        const txSignature = instruction.transaction?.signatures?.[0] || 'unknown';
+        const txSignature =  block.header.hash;
         const instructionContext = {instruction, timestamp, slot, txSignature};
       
         // Process instruction based on type - delegate to appropriate service
@@ -157,30 +183,53 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
     }
   }
 
+  // At the end of the batch, perform a single, ordered save operation.
+  // This replaces all the individual flush() calls.
+  const saveStartTime = Date.now();
   // Flush any remaining entities in memory to the database
   await tokenService.flush();
   await curveService.flush();
   await tradeService.flush();
   await globalService.flush();
-  
+  performance.databaseSaveTime += Date.now() - saveStartTime;
+
   // Log stats
-  // console.log(`--- Processing Statistics ---`);
-  // console.log(`Processed ${stats.processed.blocks} blocks with ${stats.processed.instructions} instructions`);
-  // console.log(`\nInstructions processed:`);
-  // console.log(`- Initialize: ${stats.instructions.initialize}`);
-  // console.log(`- SetParams: ${stats.instructions.setParams}`);
-  // console.log(`- Create: ${stats.instructions.create}`);
-  // console.log(`- Withdraw: ${stats.instructions.withdraw}`);
-  // console.log(`- Trade: ${stats.instructions.trade}`);
-  // console.log(`- Unknown: ${stats.instructions.unknown}`);
-  // console.log(`\nEntity updates:`);
-  // console.log(`- Tokens: ${stats.entities.tokens}`);
-  // console.log(`- BondingCurves: ${stats.entities.bondingCurves}`);
-  // console.log(`- Trades: ${stats.entities.trades}`);
-  // console.log(`- GlobalConfigs: ${stats.entities.globalConfigs}`);
-  // console.log(`- TokenCreated events: ${stats.entities.tokenCreated}`);
-  // console.log(`- TokenCompleted events: ${stats.entities.tokenCompleted}`);
-  // console.log('==== PROCESSOR COMPLETED ====');
+  console.log(`--- Processing Statistics ---`);
+  console.log(`Processed ${stats.processed.blocks} blocks with ${stats.processed.instructions} instructions`);
+  console.log(`\nInstructions processed:`);
+  console.log(`- Initialize: ${stats.instructions.initialize}`);
+  console.log(`- SetParams: ${stats.instructions.setParams}`);
+  console.log(`- Create: ${stats.instructions.create}`);
+  console.log(`- Withdraw: ${stats.instructions.withdraw}`);
+  console.log(`- Trade: ${stats.instructions.trade}`);
+  console.log(`- Unknown: ${stats.instructions.unknown}`);
+  console.log(`\nEntity updates:`);
+  console.log(`- Tokens: ${stats.entities.tokens}`);
+  console.log(`- BondingCurves: ${stats.entities.bondingCurves}`);
+  console.log(`- Trades: ${stats.entities.trades}`);
+  console.log(`- GlobalConfigs: ${stats.entities.globalConfigs}`);
+  console.log(`- TokenCreated events: ${stats.entities.tokenCreated}`);
+  console.log(`- TokenCompleted events: ${stats.entities.tokenCompleted}`);
+  console.log('==== PROCESSOR COMPLETED ====');
+
+  // Calculate and log performance metrics
+  const blockTime = Date.now() - blockStartTime;
+  performance.totalTime += blockTime;
+  performance.blockProcessingTime += blockTime;
+
+  // Log performance metrics periodically
+  if (Date.now() - lastLogTime > performance.logInterval) {
+    const avgBlockTime = performance.blockProcessingTime / performance.count;
+    const throughput = performance.count / ((Date.now() - performance.startTime) / 1000);
+
+    console.log('\n--- PERFORMANCE METRICS ---');
+    console.log( ` performance.databaseSaveTime ${performance.databaseSaveTime}`)
+    console.log(`Average block processing time: ${avgBlockTime.toFixed(2)}ms`);
+    console.log(`Current throughput: ${throughput.toFixed(2)} blocks/second`);
+    console.log('---------------------------\n');
+
+    lastLogTime = Date.now();
+  }
 }
 
 

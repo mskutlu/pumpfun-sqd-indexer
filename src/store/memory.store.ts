@@ -7,10 +7,9 @@ import { Store } from "@subsquid/typeorm-store"
  */
 export class MemoryStore<T extends { id: string }> {
   private readonly map = new Map<string, T>()
-  private readonly events: T[] = []
   private manager: StoreManager | null = null
 
-  constructor(private readonly name: string, readonly isEventType = false) {}
+  constructor(private readonly name: string) {}
 
   /**
    * Set the StoreManager reference to enable direct database flush
@@ -30,12 +29,8 @@ export class MemoryStore<T extends { id: string }> {
     const entities = this.getAll()
     if (entities.length > 0) {
       console.log(`Flushing ${entities.length} ${this.name} entities to database`)
-      await this.manager.ctx.store.save(entities)
-      
-      // Clear memory after flush if it's an event type
-      if (this.isEventType) {
-        this.events.length = 0
-      }
+      await this.manager.ctx.store.upsert(entities)
+
     }
   }
 
@@ -54,29 +49,21 @@ export class MemoryStore<T extends { id: string }> {
   }
 
   async save(entity: T): Promise<void> {
-    if (this.isEventType) {
-      // For event types, make sure we don't add duplicates with the same ID
-      // Check if we already have an event with this ID
-      const existingIndex = this.events.findIndex(e => e.id === entity.id);
-      if (existingIndex >= 0) {
-        // Replace the existing event
-        this.events[existingIndex] = entity;
-      } else {
-        // Add new event
-        this.events.push(entity);
-      }
-    } else {
-      this.map.set(entity.id, entity)
+    this.map.set(entity.id, entity)
+
+    if (this.map.size > 1000) {
+      const entities = Array.from(this.map.values())
+      this.map.clear()
+      // console.log(`batch save ${this.name} entities`)
+      this.manager?.ctx.store.upsert(entities).catch((err) => {
+        console.error(`Failed to batch save ${this.name} entities`, err)
+      })
     }
   }
 
-  async update(entity: T): Promise<void> {
-    if (this.isEventType) throw new Error("Cannot update append-only event entities")
-    this.map.set(entity.id, entity)
-  }
 
   getAll(): T[] {
-    return this.isEventType ? this.events : Array.from(this.map.values())
+    return Array.from(this.map.values())
   }
 }
 
@@ -89,10 +76,10 @@ export class StoreManager {
 
   constructor(public readonly ctx: DataHandlerContext<any, Store>) {}
 
-  getStore<E extends { id: string }>(name: string, isEventType = false): MemoryStore<E> {
+  getStore<E extends { id: string }>(name: string): MemoryStore<E> {
     let store = this.stores.get(name)
     if (!store) {
-      store = new MemoryStore<E>(name, isEventType)
+      store = new MemoryStore<E>(name)
       // Set the manager reference so the store can flush directly
       store.setManager(this)
       this.stores.set(name, store)
@@ -103,49 +90,5 @@ export class StoreManager {
   getAllStores(): Map<string, MemoryStore<any>> {
     return this.stores
   }
-  
-  /**
-   * Save all entities in memory stores to the database with optimized batching
-   */
-  async save(): Promise<void> {
-    const OPTIMAL_BATCH_SIZE = 2000; // Larger batch size for better performance
-    
-    // First collect all entities by type to minimize database round-trips
-    const nonEventEntities: Record<string, any[]> = {};
-    const eventEntities: Record<string, any[]> = {};
-    
-    // Organize entities by type
-    for (const [name, store] of this.stores.entries()) {
-      const entities = store.getAll();
-      if (entities.length === 0) continue;
-      
-      if (store.isEventType) {
-        eventEntities[name] = entities;
-      } else {
-        nonEventEntities[name] = entities;
-      }
-    }
-    
-    // Process non-event entities first (these are typically referenced by events)
-    for (const [name, entities] of Object.entries(nonEventEntities)) {
-      console.log(`Saving ${entities.length} ${name} entities`);
-      
-      // Process in optimized batches
-      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
-        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
-        await this.ctx.store.save(batch);
-      }
-    }
-    
-    // Then process event entities that may reference the non-event entities
-    for (const [name, entities] of Object.entries(eventEntities)) {
-      console.log(`Saving ${entities.length} ${name} entities`);
-      
-      // Process in optimized batches
-      for (let i = 0; i < entities.length; i += OPTIMAL_BATCH_SIZE) {
-        const batch = entities.slice(i, i + OPTIMAL_BATCH_SIZE);
-        await this.ctx.store.save(batch);
-      }
-    }
-  }
+
 }

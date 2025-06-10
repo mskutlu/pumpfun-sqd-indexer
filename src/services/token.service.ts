@@ -36,12 +36,10 @@ export class TokenService {
   ) {
     this.tokenStore = storeManager.getStore<PumpToken>("PumpToken")
     this.createdStore = storeManager.getStore<TokenCreated>(
-      "TokenCreated",
-      true
+      "TokenCreated"
     )
     this.completedStore = storeManager.getStore<TokenCompleted>(
-      "TokenCompleted",
-      true
+      "TokenCompleted"
     )
   }
   
@@ -150,7 +148,7 @@ export class TokenService {
     if (params.status) token.status = params.status
     token.updatedAt = params.updatedAt
     
-    await this.tokenStore.update(token)
+    await this.tokenStore.save(token)
     return token
   }
   

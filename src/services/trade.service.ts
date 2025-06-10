@@ -185,10 +185,9 @@ export class TradeService {
     const { instruction, timestamp, slot, txSignature } = context;
     
     try {
-
       const inner = instruction.inner.filter(f=> f.programId.toLowerCase() === indexes.PROGRAM_ID.toLowerCase()
       && f.accounts[0].toLowerCase() === indexes.EVENT_AUTHORITY.toLowerCase() && f.d8 === pumpIns.tradeEventInstruction.d8 );
-      if(inner.length === 0 || txSignature === 'unknown')
+      if(inner.length === 0)
         return;
       let decodedInnerInstruction;
       for(const i of inner) {

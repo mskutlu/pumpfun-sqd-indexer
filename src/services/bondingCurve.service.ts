@@ -105,7 +105,7 @@ export class BondingCurveService {
     if (params.feeBasisPoints !== undefined) curve.feeBasisPoints = params.feeBasisPoints
     curve.updatedAt = params.updatedAt
     
-    await this.store.update(curve)
+    await this.store.save(curve)
     return curve
   }
 
