@@ -28,7 +28,7 @@ export class MemoryStore<T extends { id: string }> {
     
     const entities = this.getAll()
     if (entities.length > 0) {
-      console.log(`Flushing ${entities.length} ${this.name} entities to database`)
+      //console.log(`Flushing ${entities.length} ${this.name} entities to database`)
       await this.manager.ctx.store.upsert(entities)
 
     }

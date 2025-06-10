@@ -10,10 +10,6 @@ export class TradeService {
   private readonly store: MemoryStore<Trade>
 
   private txLogCounter: { [key: string]: number } = {}
-  // Map to track trades by transaction ID prefix
-  private readonly tradesByTxId = new Map<string, Trade[]>()
-  // Track pending trades that need log data
-  private readonly pendingLogData = new Map<string, boolean>()
 
   constructor(
     private readonly storeManager: StoreManager,
@@ -99,13 +95,7 @@ export class TradeService {
       });
       
       await this.store.save(trade);
-      
-      // Add to our txId index for quick lookups
-      if (!this.tradesByTxId.has(params.txSignature)) {
-        this.tradesByTxId.set(params.txSignature, []);
-      }
-      this.tradesByTxId.get(params.txSignature)?.push(trade);
-      
+
       return trade;
     } 
     // Individual parameter version
@@ -151,17 +141,6 @@ export class TradeService {
       });
       
       await this.store.save(trade);
-      
-      // Also add to our txId index for quick lookups
-      if (!this.tradesByTxId.has(txId)) {
-        this.tradesByTxId.set(txId, []);
-      }
-      this.tradesByTxId.get(txId)?.push(trade);
-      
-      // Mark if this trade is waiting for log data
-      if (vSol === BigInt(0) && vToken === BigInt(0)) {
-        this.pendingLogData.set(txId, true);
-      }
       
       return trade;
     }
@@ -268,14 +247,8 @@ export class TradeService {
 
       // Update the bonding curve if available
       if (this.curveService) {
-        // First try to get by direct account reference from the decoded instruction
         let bondingCurve = bondingCurveAccount ?
           await this.curveService.getBondingCurve(bondingCurveAccount.toString()) : undefined;
-
-        // If not found by account, try to find by token ID as fallback
-        if (!bondingCurve && token) {
-          bondingCurve = await this.curveService.getBondingCurveByToken(token.id);
-        }
 
         if (bondingCurve) {
           // Use the existing real reserves as our starting point

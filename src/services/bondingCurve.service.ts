@@ -72,15 +72,7 @@ export class BondingCurveService {
     
     return curve;
   }
-  
-  /**
-   * Gets bonding curve by token ID
-   */
-  async getBondingCurveByToken(tokenId: string): Promise<BondingCurve | undefined> {
-    // Find the bonding curve associated with a specific token
-    const curves = this.store.getAll()
-    return curves.find(curve => curve.token && curve.token.id === tokenId)
-  }
+
   
   /**
    * Updates an existing bonding curve's data
