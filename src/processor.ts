@@ -1,6 +1,7 @@
 import { DataHandlerContext } from "@subsquid/batch-processor"
 import { Store } from "@subsquid/typeorm-store"
 import { augmentBlock } from "@subsquid/solana-objects"
+import { In } from "typeorm"
 
 // Import service classes
 import { StoreManager } from "./store/memory.store"
@@ -9,13 +10,70 @@ import { BondingCurveService } from "./services/bondingCurve.service"
 import { TokenService } from "./services/token.service"
 import { TradeService } from "./services/trade.service"
 
+// Import models
+import { BondingCurve, PumpToken } from "./model"
+
 // Import Pump.fun ABI layouts
 import * as pumpIns from "./abi/pump-fun/instructions"
 import { PROGRAM_ID } from "./abi/pump-fun"
+import * as indexes from "./abi/pump-fun/index"
 
 const instructionLayoutMap = new Map(
   Object.values(pumpIns).map(layout => [layout.d8, layout])
 );
+
+/**
+ * Collects all entity IDs needed for processing from a batch of blocks
+ */
+function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set<string> } {
+  const tokenIds = new Set<string>();
+  const curveIds = new Set<string>();
+
+  for (const block of blocks) {
+    for (const instruction of block.instructions) {
+      if (instruction.programId !== PROGRAM_ID) continue;
+
+      try {
+        const layout = Object.values(pumpIns).find(i => i.d8 === instruction.d8);
+        if (!layout) continue;
+
+        let decoded;
+        switch (layout.d8) {
+          case pumpIns.create.d8:
+            // The create instruction data is in an inner instruction
+            const createInner = instruction.inner?.find((f: any) => f.programId === indexes.PROGRAM_ID && f.d8 === pumpIns.createInstruction.d8);
+            if (createInner) {
+              decoded = pumpIns.createInstruction.decode(createInner);
+              if (decoded.data.mint) tokenIds.add(decoded.data.mint.toString());
+              if (decoded.data.bondingCurve) curveIds.add(decoded.data.bondingCurve.toString());
+            }
+            break;
+
+          case pumpIns.withdraw.d8:
+            decoded = pumpIns.withdraw.decode(instruction);
+            if (decoded.accounts.bondingCurve) curveIds.add(decoded.accounts.bondingCurve.toString());
+            break;
+
+          case pumpIns.buy.d8:
+          case pumpIns.sell.d8:
+            // The trade data is in an inner instruction
+            const tradeInner = instruction.inner?.find((f: any) => f.programId === indexes.PROGRAM_ID && f.d8 === pumpIns.tradeEventInstruction.d8);
+            if (tradeInner) {
+              decoded = pumpIns.tradeEventInstruction.decode(tradeInner);
+              if (decoded.data.mint) tokenIds.add(decoded.data.mint.toString());
+            }
+            // The curve ID is in the outer instruction
+            const tradeDecoded = pumpIns.buy.decode(instruction); // buy and sell have same account layout
+            if(tradeDecoded.accounts.bondingCurve) curveIds.add(tradeDecoded.accounts.bondingCurve.toString());
+            break;
+        }
+      } catch (e) {
+        // Ignore decoding errors during ID collection
+      }
+    }
+  }
+  return { tokenIds, curveIds };
+}
 
 // Performance tracking
 const performance = {
@@ -64,8 +122,31 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   const blockStartTime = Date.now();
   performance.count++;
 
-  // Initialize service layer with proper dependencies
-  const storeManager = new StoreManager(ctx);
+  // Convert blocks once using augmentBlock
+  const blocks = ctx.blocks.map(augmentBlock);
+
+  // Collect all entity IDs needed for processing
+  // console.log('Collecting entity IDs from batch...');
+  const { tokenIds, curveIds } = collectEntityIds(blocks);
+  // console.log(`Collected ${tokenIds.size} token IDs and ${curveIds.size} curve IDs`);
+
+  // Bulk prefetch all entities that will be needed during processing
+  // console.log('Prefetching entities...');
+  const prefetchStartTime = Date.now();
+  
+  // Prefetch tokens and curves in parallel for better performance
+  const [tokens, curves] = await Promise.all([
+    tokenIds.size > 0 ? ctx.store.findBy(PumpToken, { id: In([...tokenIds]) }) : [],
+    curveIds.size > 0 ? ctx.store.findBy(BondingCurve, { id: In([...curveIds]) }) : []
+  ]);
+  
+  // console.log(`Prefetched ${tokens.length} tokens and ${curves.length} curves in ${Date.now() - prefetchStartTime}ms`);
+
+  // Initialize service layer with proper dependencies and prefetched entities
+  const storeManager = new StoreManager(ctx, {
+    tokens,
+    curves
+  });
   
   // Create services with circular dependencies resolved
   const globalService = new GlobalService(storeManager);
@@ -108,9 +189,6 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
       tokenCompleted: 0
     }
   };
-
-  // Convert blocks once using augmentBlock
-  const blocks = ctx.blocks.map(augmentBlock);
 
   stats.processed.blocks = blocks.length;
 

@@ -138,7 +138,7 @@ export class BondingCurveService {
           createdAt: timestamp,
           updatedAt: timestamp
         });
-        await this.store.saveForBatchLoading(curve);
+        await this.store.save(curve);
         stats.entities.bondingCurves++;
       }
       else {
@@ -199,6 +199,7 @@ export class BondingCurveService {
   }
 
   public async saveForBatchLoading(curve: BondingCurve): Promise<void> {
-    await this.store.saveForBatchLoading(curve);
+    // Updated to use save instead of saveForBatchLoading
+    await this.store.save(curve);
   };
 }
