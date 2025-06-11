@@ -46,6 +46,7 @@ export class MemoryStore<T extends { id: string }> {
     // Direct database access - no more queue coordination needed
     const entities = this.getAll();
     if (entities.length > 0) {
+      this.map.clear()
       await this.manager.saveEntitiesToDatabase(entities);
       //console.log(`Flushed ${entities.length} entities from ${this.name} store`);
     }

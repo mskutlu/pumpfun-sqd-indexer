@@ -295,8 +295,7 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   performance.totalTime += blockTime;
   performance.blockProcessingTime += blockTime;
 
-  // Log performance metrics periodically
-  if (Date.now() - lastLogTime > performance.logInterval) {
+
     const avgBlockTime = performance.blockProcessingTime / performance.count;
     const throughput = performance.count / ((Date.now() - performance.startTime) / 1000);
 
@@ -306,8 +305,6 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
     console.log(`Current throughput: ${throughput.toFixed(2)} blocks/second`);
     console.log('---------------------------\n');
 
-    lastLogTime = Date.now();
-  }
 }
 
 
