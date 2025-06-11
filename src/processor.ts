@@ -75,19 +75,6 @@ function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set
   return { tokenIds, curveIds };
 }
 
-// Performance tracking
-const performance = {
-  totalTime: 0,
-  blockProcessingTime: 0,
-  instructionProcessingTime: 0,
-  databaseSaveTime: 0,
-  count: 0,
-  startTime: Date.now(),
-  logInterval: 10000 // Log every 10 seconds
-};
-
-// Last time we logged performance metrics
-let lastLogTime = Date.now();
 
 // Statistics tracking interface
 interface ProcessingStats {
@@ -120,7 +107,6 @@ interface ProcessingStats {
  */
 export async function handle(ctx: DataHandlerContext<any, Store>) {
   const blockStartTime = Date.now();
-  performance.count++;
 
   // Convert blocks once using augmentBlock
   const blocks = ctx.blocks.map(augmentBlock);
@@ -269,7 +255,7 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   await curveService.flush();
   await tradeService.flush();
   await globalService.flush();
-  performance.databaseSaveTime += Date.now() - saveStartTime;
+  const databaseSaveTime = Date.now() - saveStartTime;
 
   // // Log stats
   // console.log(`--- Processing Statistics ---`);
@@ -292,18 +278,18 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
 
   // Calculate and log performance metrics
   const blockTime = Date.now() - blockStartTime;
-  performance.totalTime += blockTime;
-  performance.blockProcessingTime += blockTime;
 
 
-    const avgBlockTime = performance.blockProcessingTime / performance.count;
-    const throughput = performance.count / ((Date.now() - performance.startTime) / 1000);
+
+    const avgBlockTime = blockTime / blocks.length;
+    const throughput = blocks.length / (blockTime / 1000);
 
     console.log('\n--- PERFORMANCE METRICS ---');
-    console.log( ` performance.databaseSaveTime ${performance.databaseSaveTime}`)
+    console.log( ` performance.databaseSaveTime ${databaseSaveTime}`)
     console.log(`Average block processing time: ${avgBlockTime.toFixed(2)}ms`);
     console.log(`Current throughput: ${throughput.toFixed(2)} blocks/second`);
     console.log('---------------------------\n');
+
 
 }
 
