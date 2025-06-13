@@ -2,6 +2,7 @@ import { DataHandlerContext } from "@subsquid/batch-processor"
 import { Store } from "@subsquid/typeorm-store"
 import { BondingCurve, PumpToken } from "../model";
 import { In } from "typeorm";
+import { withTimer } from "../utils/timeLogger";
 
 /**
  * Interface for prefetched entity collections
@@ -70,12 +71,12 @@ export class MemoryStore<T extends { id: string }> {
     
     // Store locally in memory - will be flushed when needed
     this.map.set(entity.id, entity)
-    if (this.map.size > 1000) {
-      const entities = Array.from(this.map.values())
-      this.map.clear()
-      // Use the StoreManager's transaction queue instead of direct database access
-      await this.manager.saveEntitiesToDatabase(entities)
-    }
+    // if (this.map.size > 1000) {
+    //   const entities = Array.from(this.map.values())
+    //   this.map.clear()
+    //   // Use the StoreManager's transaction queue instead of direct database access
+    //   await this.manager.saveEntitiesToDatabase(entities)
+    // }
   }
 
   // The saveForBatchLoading method is removed since we now prefetch entities at the start of processing
@@ -131,7 +132,8 @@ export class StoreManager {
    */
   async saveEntitiesToDatabase(entities: any[]): Promise<void> {
     if (entities.length > 0) {
-      await this.ctx.store.upsert(entities);
+      // Time the upsert operation so we know how long DB writes take
+      await withTimer("db.upsert", () => this.ctx.store.upsert(entities));
     }
   }
   
@@ -139,9 +141,9 @@ export class StoreManager {
    * Find entities by their IDs
    */
   async findEntitiesByIds<E extends { id: string }>(entityClass: any, ids: string[]): Promise<E[]> {
-    return await this.ctx.store.findBy(entityClass, {
+    return await withTimer("db.findBy", () => this.ctx.store.findBy(entityClass, {
       id: In(ids)
-    }) as E[]
+    })) as E[]
   }
   
 }

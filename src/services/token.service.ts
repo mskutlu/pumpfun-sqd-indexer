@@ -9,6 +9,7 @@ import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 import * as indexes from "../abi/pump-fun/index"
 import { GlobalService } from "./global.service"
+import { withTimer } from "../utils/timeLogger"
 
 /**
  * Sanitize a string by removing null bytes and non-UTF8 characters
@@ -103,19 +104,6 @@ export class TokenService {
   async getToken(mint: string, createIfMissing = false): Promise<PumpToken | undefined> {
     // First check in memory
     let token = await this.tokenStore.find(mint);
-    
-    // If not in memory, try to find in database
-    if (!token) {
-      try {
-        token = await this.storeManager.ctx.store.get(PumpToken, mint);
-        if (token) {
-          // Add to memory store for future access
-          await this.tokenStore.save(token);
-        }
-      } catch (err) {
-        console.error(`Error loading token ${mint} from database:`, err);
-      }
-    }
     
     // Create a placeholder token if requested and not found
     if (!token && createIfMissing) {

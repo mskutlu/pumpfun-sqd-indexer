@@ -2,6 +2,7 @@ import { GlobalConfig } from "../model"
 import { MemoryStore, StoreManager } from "../store/memory.store"
 import { Instruction as SolInstruction } from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
+import { withTimer } from "../utils/timeLogger"
 
 /**
  * Handles `initialize` and `setParams` instructions that act on the singleton
@@ -39,7 +40,7 @@ export class GlobalService {
     // If not in memory, try to find in database
     if (!config) {
       try {
-        config = await this.storeManager.ctx.store.get(GlobalConfig, params.id);
+        config = await withTimer("db.get.GlobalConfig", () => this.storeManager.ctx.store.get(GlobalConfig, params.id));
         if (config) {
           // Add to memory store for future access
           await this.store.save(config);

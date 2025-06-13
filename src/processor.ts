@@ -2,6 +2,7 @@ import { DataHandlerContext } from "@subsquid/batch-processor"
 import { Store } from "@subsquid/typeorm-store"
 import { augmentBlock } from "@subsquid/solana-objects"
 import { In } from "typeorm"
+import { withTimer } from "./utils/timeLogger"
 
 // Import service classes
 import { StoreManager } from "./store/memory.store"
@@ -122,8 +123,8 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   
   // Prefetch tokens and curves in parallel for better performance
   const [tokens, curves] = await Promise.all([
-    tokenIds.size > 0 ? ctx.store.findBy(PumpToken, { id: In([...tokenIds]) }) : [],
-    curveIds.size > 0 ? ctx.store.findBy(BondingCurve, { id: In([...curveIds]) }) : []
+    tokenIds.size > 0 ? withTimer("db.prefetch.tokens", () => ctx.store.findBy(PumpToken, { id: In([...tokenIds]) })) : [],
+    curveIds.size > 0 ? withTimer("db.prefetch.curves", () => ctx.store.findBy(BondingCurve, { id: In([...curveIds]) })) : []
   ]);
   
   // console.log(`Prefetched ${tokens.length} tokens and ${curves.length} curves in ${Date.now() - prefetchStartTime}ms`);
@@ -178,6 +179,9 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
 
   stats.processed.blocks = blocks.length;
 
+  // Collect async processing tasks
+  const asyncTasks: Promise<void>[] = [];
+
   // Iterate through blocks and instructions
   for (const block of blocks) {
     // Fix timestamp conversion - Solana timestamps need proper conversion
@@ -209,32 +213,32 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
         switch (layout.d8) {
           case pumpIns.initialize.d8:
             stats.instructions.initialize++;
-            await globalService.processInitializeInstruction(instructionContext, stats);
+            asyncTasks.push(globalService.processInitializeInstruction(instructionContext, stats));
            
             break;
 
           case pumpIns.setParams.d8:
             stats.instructions.setParams++;
-            await globalService.processSetParamsInstruction(instructionContext, stats);
+            asyncTasks.push(globalService.processSetParamsInstruction(instructionContext, stats));
            
             break;
 
           case pumpIns.create.d8:
             stats.instructions.create++;
-            await tokenService.processCreateInstruction(instructionContext, stats);
+            asyncTasks.push(tokenService.processCreateInstruction(instructionContext, stats));
            
             break;
 
           case pumpIns.withdraw.d8:
             stats.instructions.withdraw++;
-            await curveService.processWithdrawInstruction(instructionContext, stats);
+            asyncTasks.push(curveService.processWithdrawInstruction(instructionContext, stats));
            
             break;
 
           case pumpIns.buy.d8:
           case pumpIns.sell.d8:
             stats.instructions.trade++;
-            await tradeService.processTradeInstruction(instructionContext, stats);
+            asyncTasks.push(tradeService.processTradeInstruction(instructionContext, stats));
            
             break;
 
@@ -246,6 +250,9 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
       }
     }
   }
+
+  // Wait for all async tasks to finish before we perform DB flushes
+  await Promise.all(asyncTasks);
 
   // At the end of the batch, perform a single, ordered save operation.
   // This replaces all the individual flush() calls.
@@ -284,11 +291,11 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
     const avgBlockTime = blockTime / blocks.length;
     const throughput = blocks.length / (blockTime / 1000);
 
-    console.log('\n--- PERFORMANCE METRICS ---');
-    console.log( ` performance.databaseSaveTime ${databaseSaveTime}`)
-    console.log(`Average block processing time: ${avgBlockTime.toFixed(2)}ms`);
-    console.log(`Current throughput: ${throughput.toFixed(2)} blocks/second`);
-    console.log('---------------------------\n');
+    // console.log('\n--- PERFORMANCE METRICS ---');
+    // console.log( ` performance.databaseSaveTime ${databaseSaveTime}`)
+    // console.log(`Average block processing time: ${avgBlockTime.toFixed(2)}ms`);
+    // console.log(`Current throughput: ${throughput.toFixed(2)} blocks/second`);
+    // console.log('---------------------------\n');
 
 
 }

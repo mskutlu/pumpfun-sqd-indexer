@@ -5,6 +5,7 @@ import * as pumpIns from "../abi/pump-fun/instructions"
 import * as indexes from "../abi/pump-fun/index"
 import { TokenService } from "./token.service"
 import { BondingCurveService } from "./bondingCurve.service"
+import { withTimer } from "../utils/timeLogger"
 
 export class TradeService {
   private readonly store: MemoryStore<Trade>

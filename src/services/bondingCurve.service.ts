@@ -3,6 +3,7 @@ import {MemoryStore, StoreManager} from "../store/memory.store"
 import {Instruction as SolInstruction} from "@subsquid/solana-objects"
 import * as pumpIns from "../abi/pump-fun/instructions"
 import {TokenService} from "./token.service"
+import { withTimer } from "../utils/timeLogger"
 
 /**
  * Stores and updates BondingCurve entities.  All reserve deltas are applied
