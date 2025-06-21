@@ -10,6 +10,7 @@ import { GlobalService } from "./services/global.service"
 import { BondingCurveService } from "./services/bondingCurve.service"
 import { TokenService } from "./services/token.service"
 import { TradeService } from "./services/trade.service"
+import { WalletStatsService } from "./services/walletStats.service"
 
 // Import models
 import { BondingCurve, PumpToken } from "./model"
@@ -150,7 +151,10 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   });
   
   // Trade service needs both TokenService and CurveService
-  const tradeService = new TradeService(storeManager, tokenService, curveService)
+  // Instantiate wallet analytics service after storeManager
+  const walletStatsService = new WalletStatsService(storeManager);
+
+  const tradeService = new TradeService(storeManager, tokenService, curveService, walletStatsService);
   
   // Stats tracking
   const stats: ProcessingStats = {
@@ -262,6 +266,7 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   await curveService.flush();
   await tradeService.flush();
   await globalService.flush();
+  await walletStatsService.flush();
   const databaseSaveTime = Date.now() - saveStartTime;
 
   // // Log stats

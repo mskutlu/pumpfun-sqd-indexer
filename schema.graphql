@@ -62,6 +62,31 @@ type TokenCompleted @entity {
   timestamp: DateTime!
 }
 
+type WalletStats @entity {
+  id: ID!
+  volumeSol: BigDecimal!
+  realisedPnlSol: BigDecimal!
+  buySol: BigDecimal!
+  sellSol: BigDecimal!
+  successTokensCount: BigInt!
+  tokenCount: BigInt!
+  lastTradeTs: DateTime!
+}
+
+type WalletTokenStats @entity {
+  id: ID!
+  wallet: String!
+  token: PumpToken!
+  volumeSol: BigDecimal!
+  realisedPnlSol: BigDecimal!
+  buySol: BigDecimal!
+  sellSol: BigDecimal!
+  firstTradeTs: DateTime!
+  lastTradeTs: DateTime!
+  firstTradeSol: BigDecimal!
+  lastTradeSol: BigDecimal!
+}
+
 type ParamsUpdated @entity {
   id: ID!
   token: PumpToken!

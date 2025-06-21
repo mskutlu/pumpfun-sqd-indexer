@@ -5,6 +5,7 @@ import * as pumpIns from "../abi/pump-fun/instructions"
 import * as indexes from "../abi/pump-fun/index"
 import { TokenService } from "./token.service"
 import { BondingCurveService } from "./bondingCurve.service"
+import { WalletStatsService } from "./walletStats.service"
 import { withTimer } from "../utils/timeLogger"
 
 export class TradeService {
@@ -15,7 +16,8 @@ export class TradeService {
   constructor(
     private readonly storeManager: StoreManager,
     private readonly tokenService?: TokenService,
-    private readonly curveService?: BondingCurveService
+    private readonly curveService?: BondingCurveService,
+    private readonly walletStatsService?: import("./walletStats.service").WalletStatsService
   ) {
     this.store = storeManager.getStore<Trade>("Trade")
   }
@@ -245,6 +247,28 @@ export class TradeService {
         timestamp
       });
       stats.entities.trades++;
+
+      // Apply wallet-level analytics
+      if (this.walletStatsService) {
+        await this.walletStatsService.applyTrade({
+          wallet: user.toString(),
+          token,
+          isBuy,
+          solAmount,
+          timestamp
+        });
+      }
+
+      // Apply wallet-level analytics
+      if (this.walletStatsService) {
+        await this.walletStatsService.applyTrade({
+          wallet: user.toString(),
+          token,
+          isBuy,
+          solAmount,
+          timestamp
+        });
+      }
 
       // Update the bonding curve if available
       if (this.curveService) {
