@@ -259,17 +259,6 @@ export class TradeService {
         });
       }
 
-      // Apply wallet-level analytics
-      if (this.walletStatsService) {
-        await this.walletStatsService.applyTrade({
-          wallet: user.toString(),
-          token,
-          isBuy,
-          solAmount,
-          timestamp
-        });
-      }
-
       // Update the bonding curve if available
       if (this.curveService) {
         let bondingCurve = bondingCurveAccount ?
