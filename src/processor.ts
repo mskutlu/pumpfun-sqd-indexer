@@ -13,7 +13,7 @@ import { TradeService } from "./services/trade.service"
 import { WalletStatsService } from "./services/walletStats.service"
 
 // Import models
-import { BondingCurve, PumpToken } from "./model"
+import { BondingCurve, PumpToken, WalletStats, WalletTokenStats } from "./model"
 
 // Import Pump.fun ABI layouts
 import * as pumpIns from "./abi/pump-fun/instructions"
@@ -27,9 +27,16 @@ const instructionLayoutMap = new Map(
 /**
  * Collects all entity IDs needed for processing from a batch of blocks
  */
-function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set<string> } {
+function collectEntityIds(blocks: any[]): {
+  tokenIds: Set<string>,
+  curveIds: Set<string>,
+  walletIds: Set<string>,
+  walletTokenStatIds: Set<string>
+} {
   const tokenIds = new Set<string>();
   const curveIds = new Set<string>();
+  const walletIds = new Set<string>();
+  const walletTokenStatIds = new Set<string>();
 
   for (const block of blocks) {
     for (const instruction of block.instructions) {
@@ -48,6 +55,13 @@ function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set
               decoded = pumpIns.createInstruction.decode(createInner);
               if (decoded.data.mint) tokenIds.add(decoded.data.mint.toString());
               if (decoded.data.bondingCurve) curveIds.add(decoded.data.bondingCurve.toString());
+              if (decoded.data.user) {
+                const userStr = decoded.data.user.toString();
+                walletIds.add(userStr);
+                if (decoded.data.mint) {
+                  walletTokenStatIds.add(`${userStr}-${decoded.data.mint.toString()}`);
+                }
+              }
             }
             break;
 
@@ -63,6 +77,13 @@ function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set
             if (tradeInner) {
               decoded = pumpIns.tradeEventInstruction.decode(tradeInner);
               if (decoded.data.mint) tokenIds.add(decoded.data.mint.toString());
+              if (decoded.data.user) {
+                const userStr = decoded.data.user.toString();
+                walletIds.add(userStr);
+                if (decoded.data.mint) {
+                  walletTokenStatIds.add(`${userStr}-${decoded.data.mint.toString()}`);
+                }
+              }
             }
             // The curve ID is in the outer instruction
             const tradeDecoded = pumpIns.buy.decode(instruction); // buy and sell have same account layout
@@ -74,7 +95,7 @@ function collectEntityIds(blocks: any[]): { tokenIds: Set<string>, curveIds: Set
       }
     }
   }
-  return { tokenIds, curveIds };
+  return { tokenIds, curveIds, walletIds, walletTokenStatIds };
 }
 
 
@@ -115,7 +136,7 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
 
   // Collect all entity IDs needed for processing
   // console.log('Collecting entity IDs from batch...');
-  const { tokenIds, curveIds } = collectEntityIds(blocks);
+  const { tokenIds, curveIds, walletIds, walletTokenStatIds } = collectEntityIds(blocks);
   // console.log(`Collected ${tokenIds.size} token IDs and ${curveIds.size} curve IDs`);
 
   // Bulk prefetch all entities that will be needed during processing
@@ -123,9 +144,11 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   const prefetchStartTime = Date.now();
   
   // Prefetch tokens and curves in parallel for better performance
-  const [tokens, curves] = await Promise.all([
+  const [tokens, curves, wallets, walletTokenStats] = await Promise.all([
     tokenIds.size > 0 ? withTimer("db.prefetch.tokens", () => ctx.store.findBy(PumpToken, { id: In([...tokenIds]) })) : [],
-    curveIds.size > 0 ? withTimer("db.prefetch.curves", () => ctx.store.findBy(BondingCurve, { id: In([...curveIds]) })) : []
+    curveIds.size > 0 ? withTimer("db.prefetch.curves", () => ctx.store.findBy(BondingCurve, { id: In([...curveIds]) })) : [],
+    walletIds.size > 0 ? withTimer("db.prefetch.wallets", () => ctx.store.findBy(WalletStats, { id: In([...walletIds]) })) : [],
+    walletTokenStatIds.size > 0 ? withTimer("db.prefetch.walletTokenStats", () => ctx.store.findBy(WalletTokenStats, { id: In([...walletTokenStatIds]) })) : []
   ]);
   
   // console.log(`Prefetched ${tokens.length} tokens and ${curves.length} curves in ${Date.now() - prefetchStartTime}ms`);
@@ -133,7 +156,9 @@ export async function handle(ctx: DataHandlerContext<any, Store>) {
   // Initialize service layer with proper dependencies and prefetched entities
   const storeManager = new StoreManager(ctx, {
     tokens,
-    curves
+    curves,
+    wallets,
+    walletTokenStats
   });
   
   // Create services with circular dependencies resolved

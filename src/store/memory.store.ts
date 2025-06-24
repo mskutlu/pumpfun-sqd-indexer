@@ -1,6 +1,6 @@
 import { DataHandlerContext } from "@subsquid/batch-processor"
 import { Store } from "@subsquid/typeorm-store"
-import { BondingCurve, PumpToken } from "../model";
+import { BondingCurve, PumpToken, WalletStats, WalletTokenStats } from "../model";
 import { In } from "typeorm";
 import { withTimer } from "../utils/timeLogger";
 
@@ -10,6 +10,8 @@ import { withTimer } from "../utils/timeLogger";
 export interface PrefetchedEntities {
   tokens: PumpToken[];
   curves: BondingCurve[];
+  wallets?: WalletStats[];
+  walletTokenStats?: WalletTokenStats[];
 }
 
 /**
@@ -109,6 +111,14 @@ export class StoreManager {
       
       if (prefetched.curves.length > 0) {
         this.getStore<BondingCurve>('BondingCurve', prefetched.curves);
+      }
+
+      if (prefetched.wallets && prefetched.wallets.length > 0) {
+        this.getStore<WalletStats>('WalletStats', prefetched.wallets);
+      }
+
+      if (prefetched.walletTokenStats && prefetched.walletTokenStats.length > 0) {
+        this.getStore<WalletTokenStats>('WalletTokenStats', prefetched.walletTokenStats);
       }
     }
   }
